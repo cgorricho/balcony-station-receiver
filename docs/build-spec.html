@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Balcony Station Receiver — Build Spec</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:860px;margin:2rem auto;padding:0 1.2rem;line-height:1.55;color:#1f2328;background:#fff}
+h1{border-bottom:2px solid #d0d7de;padding-bottom:.3em} h2{border-bottom:1px solid #d0d7de;padding-bottom:.2em;margin-top:2em}
+code{background:#f3f4f6;padding:.1em .35em;border-radius:4px;font-size:.92em}
+pre{background:#f6f8fa;padding:1em;border-radius:6px;overflow-x:auto} pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;margin:1em 0} th,td{border:1px solid #d0d7de;padding:.45em .7em;text-align:left;vertical-align:top} th{background:#f6f8fa}
+hr{border:none;border-top:1px solid #d0d7de;margin:2em 0}
+@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3} code,pre,th{background:#161b22} th,td,h1,h2,hr{border-color:#30363d}}
+</style></head><body>
+<h1>Balcony Station Receiver — Build Spec</h1>
+<p><strong>For:</strong> Claude Code, running on Carlos's personal Windows laptop
+<strong>Goal:</strong> Create the project folder, Python environment, and a small always-listening receiver that stores readings sent over home WiFi by an ESP32 sensor node on the balcony.</p>
+<hr />
+<h2>0. Instructions to Claude Code</h2>
+<ul>
+<li>Work on <strong>native Windows</strong> (PowerShell). <strong>Do not use WSL</strong> for this project. WSL2 sits behind a virtual network, so the ESP32 can't reach it without extra setup.</li>
+<li>Project folder, confirmed by Carlos: <code>C:\Users\carlos\Documents\Projects\balcony-station-receiver</code>.</li>
+<li><strong>Ask before running anything that needs admin rights</strong> (firewall rule, scheduled task). Show the exact command first.</li>
+<li>Build in the order of Section 9 and confirm each milestone with Carlos before moving on. He prefers one step at a time.</li>
+<li>Initialize a git repo. Never commit <code>.env</code> or the <code>data/</code> folder.</li>
+</ul>
+<hr />
+<h2>1. Context</h2>
+<pre><code>[ESP32-C6 node on balcony, AA batteries]
+   wakes every ~10 min → reads sensors → saves reading in its flash memory
+   → tries HTTP POST to laptop → on success, deletes the readings the laptop acknowledged
+                │  (home WiFi, LAN only)
+                ▼
+[This receiver on the Windows laptop]
+   validates → stores in SQLite (no duplicates) → acks highest seq stored with no gaps
+</code></pre>
+<ul>
+<li>The laptop is often asleep or away. <strong>The node buffers readings and resends them in batches.</strong> The receiver must accept batches, tolerate resends and out-of-order data, and never store duplicates.</li>
+<li>Frost/heat alerts are <strong>not</strong> this receiver's job. The node pushes them directly to Carlos's phone.</li>
+<li>Nothing leaves the LAN. No cloud, no VPS.</li>
+</ul>
+<hr />
+<h2>2. Environment</h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Choice</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OS</td>
+<td>Windows 10/11, native</td>
+</tr>
+<tr>
+<td>Python</td>
+<td>3.12+</td>
+</tr>
+<tr>
+<td>Env/package manager</td>
+<td><code>uv</code> (install it if missing: <code>winget install astral-sh.uv</code>). Fallback: <code>python -m venv .venv</code> + pip</td>
+</tr>
+<tr>
+<td>Web framework</td>
+<td>FastAPI + Uvicorn</td>
+</tr>
+<tr>
+<td>Validation</td>
+<td>Pydantic v2</td>
+</tr>
+<tr>
+<td>Storage</td>
+<td>SQLite via stdlib <code>sqlite3</code>, WAL mode</td>
+</tr>
+<tr>
+<td>Config</td>
+<td><code>.env</code> loaded with <code>python-dotenv</code> (commit a <code>.env.example</code>)</td>
+</tr>
+<tr>
+<td>Tests</td>
+<td>pytest + httpx (FastAPI TestClient)</td>
+</tr>
+<tr>
+<td>Optional</td>
+<td><code>zeroconf</code> for mDNS advertising (see 6.3)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>3. Project structure</h2>
+<pre><code>balcony-station-receiver/
+├── README.md
+├── pyproject.toml
+├── .env.example
+├── .gitignore              # .env, data/, logs/, .venv/
+├── src/receiver/
+│   ├── __init__.py
+│   ├── __main__.py         # python -m receiver starts the server
+│   ├── logging_setup.py    # rotating log, API key redaction
+│   ├── main.py             # FastAPI app + endpoints
+│   ├── models.py           # Pydantic schemas
+│   ├── db.py               # SQLite init, inserts, queries
+│   ├── config.py           # settings from .env
+│   └── derived.py          # PPFD / DLI calculations
+├── scripts/
+│   ├── fake_node.py        # simulates the ESP32 (batches, resends, gaps)
+│   ├── export_csv.py       # export readings to CSV (°C and °F columns)
+│   ├── daily_summary.py    # min/max temps, DLI, sun window per day
+│   ├── install_firewall.ps1
+│   ├── install_task.ps1    # Task Scheduler, start at logon, hidden via pythonw
+│   └── show_network.ps1    # network profile and DHCP reservation details
+├── docs/
+│   ├── build-spec.html     # copy of this spec
+│   └── BUILD_PLAN.md       # milestone status and decisions
+├── tests/
+│   ├── test_ingest.py
+│   ├── test_endpoints.py
+│   ├── test_derived.py
+│   ├── test_scripts.py
+│   └── test_logging.py
+├── data/                  # station.db lives here (gitignored)
+└── logs/                   # rotating log files (gitignored)
+</code></pre>
+<hr />
+<h2>4. Configuration (<code>.env</code>)</h2>
+<pre><code>STATION_HOST=0.0.0.0
+STATION_PORT=8765
+STATION_API_KEY=&lt;generate a random 32-char token on first setup&gt;
+STATION_DB_PATH=data/station.db
+STATION_LOG_DIR=logs
+STATION_TZ=America/New_York
+</code></pre>
+<hr />
+<h2>5. API contract (the ESP32 firmware will be written to match this exactly)</h2>
+<p>All requests from the node carry the header <code>X-Station-Key: &lt;STATION_API_KEY&gt;</code>. A missing or wrong key returns <code>401</code>.</p>
+<h3>5.1 <code>POST /api/v1/readings</code></h3>
+<p>Request body:</p>
+<pre><code class="language-json">{
+  &quot;node_id&quot;: &quot;balcony-01&quot;,
+  &quot;fw_version&quot;: &quot;0.1.0&quot;,
+  &quot;oldest_buffered_seq&quot;: 1003,
+  &quot;readings&quot;: [
+    {
+      &quot;seq&quot;: 1042,
+      &quot;ts&quot;: 1762538400,
+      &quot;ts_synced&quot;: true,
+      &quot;metrics&quot;: {
+        &quot;air_temp_c&quot;: 18.4,
+        &quot;air_rh_pct&quot;: 52.1,
+        &quot;lux&quot;: 61234.0,
+        &quot;tray_temp_c&quot;: 21.7,
+        &quot;pellet_moisture_raw&quot;: 1830,
+        &quot;battery_v&quot;: 4.71,
+        &quot;power_source&quot;: &quot;battery&quot;,
+        &quot;rssi_dbm&quot;: -61
+      }
+    }
+  ]
+}
+</code></pre>
+<p>Rules:
+- <code>seq</code>: a monotonically increasing integer per node, kept across deep sleep. <code>(node_id, seq)</code> is the unique key. <strong>Duplicates are silently ignored, not errors.</strong>
+- <code>oldest_buffered_seq</code>: required. The lowest <code>seq</code> still in the node's buffer. It must not be higher than the lowest <code>seq</code> in the batch; otherwise return <code>422</code>. Anything below it can never be resent, so the receiver does not wait for it.
+- <code>ts</code>: Unix epoch seconds, UTC, from the node's clock. <code>ts_synced</code> is false if the node hasn't synced its clock recently. Store it anyway.
+- <code>metrics</code>: an open dictionary. <strong>Unknown metric names must be accepted and stored</strong>, so new sensors can be added later without changing the receiver. Values are numbers, or short strings (e.g. <code>power_source</code>).
+- Batches hold 1 to 500 readings. Readings may arrive out of order.
+- <code>seq</code> and <code>ts</code> are non-negative JSON integers. <code>node_id</code>, <code>fw_version</code>, metric names and text values are at most 64 characters. Numbers must be finite.
+- The receiver also records its own <code>received_at</code> timestamp for every reading.</p>
+<p>Response <code>200</code>:</p>
+<pre><code class="language-json">{ &quot;stored&quot;: 37, &quot;duplicates&quot;: 3, &quot;ack_seq&quot;: 1042, &quot;server_ts&quot;: 1762538455 }
+</code></pre>
+<ul>
+<li><code>ack_seq</code>: the highest <code>seq</code> such that every <code>seq</code> from <code>oldest_buffered_seq</code> up to and including it is stored for this node. It is <code>null</code> if <code>oldest_buffered_seq</code> itself is not stored. The node deletes everything up to and including <code>ack_seq</code> from its buffer, and deletes nothing on <code>null</code>.</li>
+<li>Because the run starts at the node's own buffer floor, a missing reading holds the ack back only until the node's floor moves past it. A permanently lost reading cannot stall acks. The node should send oldest readings first.</li>
+<li>Commit the whole batch in <strong>one transaction</strong> before responding.</li>
+</ul>
+<p>Validation errors return <code>422</code> with details. The receiver must never crash on bad input.</p>
+<h3>5.2 <code>GET /api/v1/time</code></h3>
+<p>Returns <code>{ "server_ts": &lt;epoch UTC&gt; }</code>. The node can use this to set its clock without internet NTP. No API key required.</p>
+<h3>5.3 <code>GET /api/v1/health</code></h3>
+<p>Returns <code>{ "status": "ok", "db": "ok", "last_reading_at": &lt;epoch|null&gt;, "nodes": ["balcony-01"] }</code>. If the database can't be read, it returns <code>503</code> with <code>status</code> and <code>db</code> set to <code>"error"</code>. No API key required.</p>
+<h3>5.4 <code>GET /api/v1/latest?node_id=balcony-01</code></h3>
+<p>Returns the reading with the highest <code>seq</code> (its metrics plus <code>seq</code>, <code>ts</code>, <code>ts_synced</code>, <code>received_at</code>, <code>fw_version</code>), for quick checks from a browser. An unknown node returns <code>404</code>. Requires the API key, sent as a header (preferred) or <code>?key=</code> query parameter. Query strings must never reach the logs: mask the key or turn off Uvicorn's access log.</p>
+<hr />
+<h2>6. Storage</h2>
+<h3>6.1 Schema (long format, so adding sensors needs no schema changes)</h3>
+<pre><code class="language-sql">CREATE TABLE readings (
+  node_id      TEXT    NOT NULL,
+  seq          INTEGER NOT NULL,
+  ts           INTEGER NOT NULL,     -- node clock, epoch UTC
+  ts_synced    INTEGER NOT NULL,     -- 0/1
+  received_at  INTEGER NOT NULL,     -- laptop clock, epoch UTC
+  fw_version   TEXT,
+  PRIMARY KEY (node_id, seq)
+);
+
+CREATE TABLE metrics (
+  node_id  TEXT    NOT NULL,
+  seq      INTEGER NOT NULL,
+  name     TEXT    NOT NULL,
+  value_num REAL,
+  value_txt TEXT,
+  PRIMARY KEY (node_id, seq, name),
+  FOREIGN KEY (node_id, seq) REFERENCES readings(node_id, seq)
+);
+
+CREATE INDEX idx_readings_ts ON readings(ts);
+CREATE INDEX idx_metrics_name ON metrics(name);
+</code></pre>
+<ul>
+<li>Use <code>INSERT OR IGNORE</code> for duplicate handling.</li>
+<li>Enable <code>PRAGMA journal_mode=WAL</code>.</li>
+<li>Store raw values only, in SI units. Conversions (°F, PPFD, DLI) are computed on output.</li>
+</ul>
+<h3>6.2 Derived values (<code>derived.py</code>)</h3>
+<ul>
+<li><code>ppfd_umol = lux / 54</code>. This is the sunlight approximation. Keep the factor configurable.</li>
+<li><strong>DLI</strong> (mol/m²/day) = sum over the day of <code>ppfd × interval_seconds / 1,000,000</code>, using the real gaps between consecutive readings (capped at 30 minutes so long data gaps don't inflate it). Days are local <code>America/New_York</code> calendar days. Report how much of the day the data covers.</li>
+<li><strong>Sun window</strong>: first and last time each day that lux is above a threshold (default 20,000 lux, configurable), as a rough "direct sun on the railing" indicator.</li>
+<li><code>c_to_f(c) = c × 9/5 + 32</code>.</li>
+</ul>
+<h3>6.3 Optional: mDNS</h3>
+<p>Advertise <code>_station._tcp.local</code> with <code>zeroconf</code>, so the node can find the laptop by name if the IP address changes. A DHCP reservation on the router is the primary plan (Section 8). Implement this only if Carlos asks.</p>
+<hr />
+<h2>7. Scripts</h2>
+<ul>
+<li><strong><code>fake_node.py</code></strong>: posts realistic fake data (daytime light curve, temperatures that drop overnight). Flags: <code>--batch N</code>, <code>--resend</code> (repeats the last batch to test duplicate handling), <code>--gap HOURS</code> (simulates the laptop being away), <code>--host</code>, <code>--key</code>.</li>
+<li><strong><code>export_csv.py</code></strong>: wide CSV with one row per reading and one column per metric, plus <code>*_f</code> columns for temperatures. Flags: <code>--from</code>, <code>--to</code> dates, <code>--node</code>.</li>
+<li><strong><code>daily_summary.py</code></strong>: a table per day with min/max air temperature (°F), min/max tray temperature (°F), hours below 45°F, DLI, sun window start/end, data coverage %.</li>
+</ul>
+<hr />
+<h2>8. Windows setup (each step needs Carlos's OK; admin where noted)</h2>
+<ol>
+<li><strong>Network profile:</strong> confirm the home WiFi is set to <strong>Private</strong> (<code>Get-NetConnectionProfile</code>). Firewall rules here are scoped to Private.</li>
+<li><strong>Firewall</strong> (admin): <code>install_firewall.ps1</code> creates an inbound rule for TCP 8765, <strong>Private profile only</strong>, allowing only the local subnet:
+   <code>New-NetFirewallRule -DisplayName "Balcony Station Receiver" -Direction Inbound -Protocol TCP -LocalPort 8765 -Profile Private -RemoteAddress LocalSubnet -Action Allow</code></li>
+<li><strong>Auto-start:</strong> <code>install_task.ps1</code> registers a Task Scheduler task that runs at logon for the current user, starts the server without a console window, restarts on failure (3 tries, 1 minute apart), and has no time limit. After a reboot the receiver does not run until Carlos logs in; the node keeps buffering until then.</li>
+<li><strong>DHCP reservation:</strong> this is a manual router step. Print instructions telling Carlos to look up the laptop's WiFi MAC address (<code>Get-NetAdapter -Name Wi-Fi</code>) and reserve its current IP address in the router's admin page. Print the current IPv4 address (<code>Get-NetIPAddress -InterfaceAlias Wi-Fi -AddressFamily IPv4</code>) so he knows what to reserve.</li>
+<li><strong>Smoke test from another device:</strong> open <code>http://&lt;laptop-ip&gt;:8765/api/v1/health</code> from a phone on the same WiFi.</li>
+</ol>
+<hr />
+<h2>9. Build order and acceptance criteria</h2>
+<ol>
+<li><strong>Scaffold:</strong> folder, git, <code>uv</code> env, dependencies, <code>.env</code> generated with a random key. <code>uv run pytest</code> passes (empty).</li>
+<li><strong>Ingest:</strong> the <code>POST /readings</code> endpoint plus storage. Tests cover: valid batch stored; resent batch → all duplicates, no new rows; out-of-order seqs; gap in seqs → <code>ack_seq</code> stops before the gap, then advances once it is filled; <code>oldest_buffered_seq</code> moved past a gap → <code>ack_seq</code> advances; <code>oldest_buffered_seq</code> not stored → <code>ack_seq</code> is <code>null</code>; <code>oldest_buffered_seq</code> above the batch → 422; unknown metric names stored; bad key → 401; malformed body → 422 with no crash.</li>
+<li><strong>Other endpoints:</strong> <code>/time</code>, <code>/health</code>, <code>/latest</code>, with tests.</li>
+<li><strong>Derived values and scripts:</strong> DLI test using a synthetic day with known lux values gives the expected value within 1%. Fake node, CSV export and daily summary all run against a test database.</li>
+<li><strong>Logging:</strong> a rotating file log in <code>logs/</code> (5 × 1 MB) records each batch (node, stored, duplicates, ack_seq, client IP) and every error. A test confirms the API key never appears in the log.</li>
+<li><strong>Windows integration:</strong> firewall rule, scheduled task, DHCP reservation instructions. Server survives a reboot and login. Health check is reachable from a phone.</li>
+<li><strong>README:</strong> how to start and stop the server, view the latest reading, export CSV, run the daily summary, rotate the API key, and uninstall (remove the task and firewall rule).</li>
+</ol>
+<p><strong>Done when:</strong> <code>fake_node.py</code> running from a second terminal can push 24 hours of simulated data, including one resend and one 6-hour gap. The database then holds no duplicates, and <code>daily_summary.py</code> prints a correct table.</p>
+<hr />
+<h2>10. Out of scope (for now)</h2>
+<ul>
+<li>ESP32 firmware (separate project; it will follow Section 5)</li>
+<li>Phone alerts (handled by the node, via ntfy)</li>
+<li>Dashboards (a later option is local Grafana or a simple matplotlib/plotly script)</li>
+<li>Hydroponic bottle sensors (water level, EC, solution temperature). These will arrive as new metric names and need no receiver changes.</li>
+</ul>
+</body></html>
