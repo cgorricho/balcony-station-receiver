@@ -230,9 +230,9 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <hr />
 <h2>8. Windows setup (each step needs Carlos's OK; admin where noted)</h2>
 <ol>
-<li><strong>Network profile:</strong> confirm the home WiFi is set to <strong>Private</strong> (<code>Get-NetConnectionProfile</code>). Firewall rules here are scoped to Private.</li>
-<li><strong>Firewall</strong> (admin): <code>install_firewall.ps1</code> creates an inbound rule for TCP 8765, <strong>Private profile only</strong>, allowing only the local subnet:
-   <code>New-NetFirewallRule -DisplayName "Balcony Station Receiver" -Direction Inbound -Protocol TCP -LocalPort 8765 -Profile Private -RemoteAddress LocalSubnet -Action Allow</code></li>
+<li><strong>Network profile:</strong> leave it as it is. The network stays <strong>Public</strong>, because switching to Private would change other apps' firewall rules and turn on Network Discovery.</li>
+<li><strong>Firewall</strong> (admin): <code>install_firewall.ps1</code> creates one inbound rule for TCP 8765, allowing only the home subnet:
+   <code>New-NetFirewallRule -DisplayName "Balcony Station Receiver" -Direction Inbound -Protocol TCP -LocalPort 8765 -Profile Public,Private -RemoteAddress 10.0.0.0/24 -Action Allow</code></li>
 <li><strong>Auto-start:</strong> <code>install_task.ps1</code> registers a Task Scheduler task that runs at logon for the current user, starts the server without a console window, restarts on failure (3 tries, 1 minute apart), and has no time limit. After a reboot the receiver does not run until Carlos logs in; the node keeps buffering until then.</li>
 <li><strong>DHCP reservation:</strong> this is a manual router step. Print instructions telling Carlos to look up the laptop's WiFi MAC address (<code>Get-NetAdapter -Name Wi-Fi</code>) and reserve its current IP address in the router's admin page. Print the current IPv4 address (<code>Get-NetIPAddress -InterfaceAlias Wi-Fi -AddressFamily IPv4</code>) so he knows what to reserve.</li>
 <li><strong>Smoke test from another device:</strong> open <code>http://&lt;laptop-ip&gt;:8765/api/v1/health</code> from a phone on the same WiFi.</li>

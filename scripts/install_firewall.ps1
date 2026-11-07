@@ -1,6 +1,8 @@
 <#
 Adds or removes the inbound firewall rule for the receiver.
-The rule covers TCP on the Private profile, from the local subnet only.
+The rule opens one TCP port to the home subnet only. The network stays Public,
+so other apps' firewall rules and Network Discovery are unchanged. The rule also
+covers Private, so it keeps working if the network is switched later.
 
 Run from an Administrator PowerShell, in the project folder:
     powershell -ExecutionPolicy Bypass -File scripts\install_firewall.ps1
@@ -10,6 +12,7 @@ Run from an Administrator PowerShell, in the project folder:
 #>
 param(
     [int]$Port = 8765,
+    [string]$Subnet = "10.0.0.0/24",
     [switch]$Uninstall,
     [switch]$DryRun
 )
@@ -21,7 +24,7 @@ if ($DryRun) {
     if ($Uninstall) {
         Write-Output "Would remove firewall rule '$ruleName'."
     } else {
-        Write-Output "Would create firewall rule '$ruleName': inbound TCP $Port, Private profile, LocalSubnet only, Allow."
+        Write-Output "Would create firewall rule '$ruleName': inbound TCP $Port, Public and Private profiles, from $Subnet only, Allow."
     }
     exit 0
 }
@@ -39,6 +42,6 @@ if ($existing) {
 
 if (-not $Uninstall) {
     New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP `
-        -LocalPort $Port -Profile Private -RemoteAddress LocalSubnet -Action Allow | Out-Null
-    Write-Output "Created rule '$ruleName' for TCP $Port (Private profile, local subnet only)."
+        -LocalPort $Port -Profile Public, Private -RemoteAddress $Subnet -Action Allow | Out-Null
+    Write-Output "Created rule '$ruleName' for TCP $Port, from $Subnet only."
 }

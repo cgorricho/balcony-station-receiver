@@ -30,9 +30,9 @@ Write-Output "Network profile: $($network.NetworkCategory)"
 Write-Output "MAC address:     $($adapter.MacAddress)"
 Write-Output "IPv4 address:    $ip"
 Write-Output ""
-if ($network.NetworkCategory -ne "Private") {
-    Write-Output "WARNING: this network is not Private, so the firewall rule will not apply."
-    Write-Output "Change it in Settings > Network & internet > this connection's properties."
+if ($ip -notlike "10.0.0.*") {
+    Write-Output "WARNING: this address is outside the firewall rule's default subnet, 10.0.0.0/24."
+    Write-Output "Run install_firewall.ps1 with -Subnet set to this network's subnet."
     Write-Output ""
 }
 if (-not $isWifi) {

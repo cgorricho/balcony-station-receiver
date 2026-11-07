@@ -27,14 +27,17 @@ If `.env` is missing, copy `.env.example` to `.env` and set a key (see
    powershell -ExecutionPolicy Bypass -File scripts\show_network.ps1
    ```
 
-   The network profile must be **Private**, or the firewall rule won't apply. The
-   laptop can be wired or on WiFi, as long as it's on the same network as the node.
+   The laptop can be wired or on WiFi, as long as it's on the same network as the
+   node. The network can stay Public.
 
 2. Add the firewall rule, from an **Administrator** PowerShell:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\install_firewall.ps1
    ```
+
+   This opens port 8765 to `10.0.0.0/24` only. Add `-Subnet` if your home network
+   uses a different range.
 
 3. Register auto-start. Use an Administrator PowerShell if Windows denies access:
 

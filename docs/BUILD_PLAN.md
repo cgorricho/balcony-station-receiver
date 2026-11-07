@@ -26,10 +26,13 @@ repeats it automatically.
 
 ## Remaining steps for milestone 6
 
+**Postponed on 2026-11-07 for about two weeks, along with the hardware build.** None
+of these steps have been applied to the laptop.
+
 These change Windows or the router, so Carlos runs them. Details are in the README.
 
-- [ ] Set the network to Private. On 2026-11-07 the laptop was on wired `Ethernet 3`, profile Public, with WiFi disconnected (`scripts/show_network.ps1`)
-- [ ] Add the firewall rule (`scripts/install_firewall.ps1`, Administrator)
+- [ ] Confirm whether IT allows an inbound port on this laptop. It is joined to a company domain, runs SentinelOne, and the IT admin connects remotely with Ninja
+- [ ] Add the firewall rule (`scripts/install_firewall.ps1`, Administrator). The network stays Public
 - [ ] Register the task (`scripts/install_task.ps1`)
 - [ ] Reserve the laptop's IP address on the router
 - [ ] Reboot, log in, and confirm the server came back
@@ -50,6 +53,7 @@ These change Windows or the router, so Carlos runs them. Details are in the READ
 | Log redacts the key and `?key=` values as well | A traceback must not leak the key either |
 | Task allows running on battery | Windows tasks refuse to run on battery by default |
 | `show_network.ps1` follows the default route, not the `Wi-Fi` adapter name | The laptop may be wired |
+| Keep the network Public; open one port to `10.0.0.0/24` instead of switching to Private | Switching would cut inbound access for Syncthing, Docker and others and turn on Network Discovery |
 
 ## Known gaps
 
