@@ -209,6 +209,17 @@ STATION_FORWARDED_ALLOW_IPS=&lt;the Docker gateway address nginx connects from&g
 <p>Returns <code>{ "status": "ok", "db": "ok", "last_reading_at": &lt;epoch|null&gt;, "nodes": ["balcony-01"] }</code>. If the database can't be read, it returns <code>503</code> with <code>status</code> and <code>db</code> set to <code>"error"</code>. No API key required, but only reachable on the VPS (for example over <code>ssh</code>).</p>
 <h3>5.4 <code>GET /api/v1/latest?node_id=balcony-01</code></h3>
 <p>Returns the reading with the highest <code>seq</code> (its metrics plus <code>seq</code>, <code>ts</code>, <code>ts_synced</code>, <code>received_at</code>, <code>fw_version</code>), for quick checks on the VPS. An unknown node returns <code>404</code>. Requires the API key, sent as a header only. The <code>?key=</code> option is removed, because nginx logs full URLs. The dashboard replaces the browser check.</p>
+<h3>5.5 Security requirements for the node firmware</h3>
+<p>The firmware is a separate project, but the receiver's security depends on it. The firmware must meet these:</p>
+<ul>
+<li><strong>Verify the server certificate</strong> against root certificates built into the firmware: ISRG Root X1 and ISRG Root X2, the Let's Encrypt roots. Never turn verification off, for example with <code>setInsecure()</code>, even while testing. Without this check, anyone on the home WiFi or the router path could pose as the server, take the API key and send a false time.</li>
+<li>Check the hostname as well as the certificate chain.</li>
+<li>Get the time from NTP before the first HTTPS request, since certificate checks need a valid clock. Use <code>/api/v1/time</code> only as a check.</li>
+<li>Keep the API key out of the firmware repo. Load it from a local, gitignored config at build time.</li>
+<li>Expose no network services. The node only makes outgoing requests.</li>
+<li><strong>Optional: ESP32 flash encryption</strong>, so a stolen node doesn't easily give up its key. The cost is that reflashing gets harder, and a mistake can lock the board. Decide this before the first deployment.</li>
+</ul>
+<p>If a node is lost or stolen, rotate the API key (see the README). The old key then returns <code>401</code>.</p>
 <hr />
 <h2>6. Storage</h2>
 <h3>6.1 Schema (long format, so adding sensors needs no schema changes)</h3>
@@ -254,6 +265,7 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <li>Today's latest reading, and the daily summary table from <code>derived.py</code>.</li>
 <li>Plotly's JavaScript is served by the app, not a third-party CDN.</li>
 <li>Works on a phone.</li>
+<li><strong>Warnings for readings that look wrong</strong>, so tampering or a faulty sensor shows up. It flags values outside physical ranges (for example air temperature outside −40 to 60 °C, humidity outside 0 to 100%, negative lux), jumps in <code>seq</code> of more than 1,000 above the previous one, <code>ts</code> more than a day away from <code>received_at</code>, and any <code>node_id</code> other than the known ones. Warnings only. Nothing is deleted or rejected. The ranges live in one place in the code.</li>
 <li>Login is nginx basic auth. The app has no user accounts, so the dashboard must never be published except through nginx.</li>
 </ul>
 <hr />
@@ -269,7 +281,7 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <ol>
 <li><strong>Readiness:</strong> before deploying, confirm who else can log in, check <code>ufw</code>, and check from outside whether services published on <code>0.0.0.0</code> are reachable. Docker-published ports usually bypass <code>ufw</code>.</li>
 <li><strong>DNS:</strong> add an A record for <code>station.carlosgorrichoai.one</code> pointing to the VPS.</li>
-<li><strong>Container:</strong> clone to <code>~/apps/balcony-station-receiver</code>, create <code>.env</code> with a new API key, and run <code>docker compose up -d</code>. The compose file sets <code>restart: unless-stopped</code>, publishes <code>127.0.0.1:8765</code> only, and keeps <code>data/</code> and <code>logs/</code> in mounted folders. Docker group membership covers this step, so no <code>sudo</code> is needed.</li>
+<li><strong>Container:</strong> clone to <code>~/apps/balcony-station-receiver</code>, create <code>.env</code> with a new API key, and run <code>docker compose up -d</code>. The compose file sets <code>restart: unless-stopped</code>, publishes <code>127.0.0.1:8765</code> only, and keeps <code>data/</code> and <code>logs/</code> in mounted folders. The container runs as a non-root user, with a read-only filesystem except for those two folders and a small <code>/tmp</code>, all Linux capabilities dropped, and <code>no-new-privileges</code> set. Docker group membership covers this step, so no <code>sudo</code> is needed.</li>
 <li><strong>nginx</strong> (sudo): install <code>deploy/nginx-station.conf</code> as a new site. It allows the paths in Section 5 only, limits request size to 1 MB, rate limits the public paths, and adds <code>auth_basic</code> to <code>/dashboard</code>. Test with <code>nginx -t</code> before reloading, because other live sites share this nginx.</li>
 <li><strong>Certificate</strong> (sudo): issue it with <code>certbot --nginx -d station.carlosgorrichoai.one</code>.</li>
 <li><strong>Dashboard login</strong> (sudo): create the password file with <code>htpasswd</code>, outside the repo.</li>
@@ -285,8 +297,8 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <li><strong>Derived values and scripts:</strong> DLI test using a synthetic day with known lux values gives the expected value within 1%. Fake node, CSV export and daily summary all run against a test database.</li>
 <li><strong>Logging:</strong> a rotating file log in <code>logs/</code> (5 × 1 MB) records each batch (node, stored, duplicates, ack_seq, client IP) and every error. A test confirms the API key never appears in the log.</li>
 <li><strong>Production hardening:</strong> remove <code>?key=</code>; turn off <code>/docs</code>, <code>/redoc</code> and <code>/openapi.json</code>; trust forwarded client IPs from <code>STATION_FORWARDED_ALLOW_IPS</code> only; give <code>fake_node.py</code> a <code>--url</code> flag. Remove the Windows install scripts. Tests cover each change.</li>
-<li><strong>Dashboard:</strong> the page in 6.3, with tests for empty data, gaps and text metrics.</li>
-<li><strong>Packaging:</strong> Dockerfile, compose file, nginx template and <code>backup_db.py</code>. The image builds and passes the Done-when scenario locally on Linux. A restored backup opens and holds the expected rows.</li>
+<li><strong>Dashboard:</strong> the page in 6.3, with tests for empty data, gaps, text metrics and each warning.</li>
+<li><strong>Packaging:</strong> Dockerfile, compose file, nginx template and <code>backup_db.py</code>. The image builds and passes the Done-when scenario locally on Linux, running as the non-root user with the read-only filesystem from Section 8. A restored backup opens and holds the expected rows.</li>
 <li><strong>README:</strong> rewritten for the VPS: deploy, update, start and stop, view the dashboard, export CSV, run the daily summary, rotate the API key, restore a backup, and remove the site.</li>
 <li><strong>Server readiness:</strong> Section 8, steps 1 and 2.</li>
 <li><strong>Deploy:</strong> Section 8, steps 3 to 7.</li>
@@ -296,7 +308,7 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <hr />
 <h2>10. Out of scope (for now)</h2>
 <ul>
-<li>ESP32 firmware (separate project; it will follow Section 5, including HTTPS, certificate checks and hourly uploads)</li>
+<li>ESP32 firmware (separate project; it will follow Section 5, including the security requirements in 5.5 and hourly uploads)</li>
 <li>Phone alerts (handled by the node, via ntfy)</li>
 <li>Hydroponic bottle sensors (water level, EC, solution temperature). These will arrive as new metric names and need no receiver changes.</li>
 </ul>

@@ -21,8 +21,8 @@ postponed about two weeks, but milestones 6 to 9 don't depend on it.
 | 4 | Derived values and scripts | Done | Claude |
 | 5 | Logging: rotating file log with the API key redacted | Done | Claude |
 | 6 | Production hardening: no `?key=`, no `/docs`, forwarded IPs, `fake_node.py --url`, remove Windows scripts | Next | Claude |
-| 7 | Dashboard at `/dashboard` | Not started | Claude |
-| 8 | Packaging: Dockerfile, compose, nginx template, backups | Not started | Claude |
+| 7 | Dashboard at `/dashboard`, with warnings for readings that look wrong | Not started | Claude |
+| 8 | Packaging: Dockerfile, compose, nginx template, backups; container runs non-root and read-only | Not started | Claude |
 | 9 | README rewritten for the VPS | Not started | Claude |
 | 10 | Server readiness | Not started | Carlos and Claude |
 | 11 | Deploy | Not started | Carlos and Claude |
@@ -56,6 +56,20 @@ Carlos runs the steps that need `sudo`.
 |---|---|---|
 | `seq` reset protection | Add `boot_id` sent by the node and stored in the key, or accept the risk. Recommended: add it | Before firmware starts |
 | Where the off-VPS backup goes | Not chosen | Milestone 11 |
+| ESP32 flash encryption | Turn it on so a stolen node doesn't easily give up its key, or leave it off so reflashing stays easy | Before the node is deployed |
+
+## Security
+
+Added 2026-11-08 (spec version 7). The receiver's protection depends on the firmware too.
+
+| Item | Where | Status |
+|---|---|---|
+| Firmware checks the server certificate against built-in Let's Encrypt roots (ISRG Root X1 and X2) and the hostname, and never turns checking off | Spec 5.5, firmware project | Required, before firmware starts |
+| Container runs as a non-root user, read-only except `data/`, `logs/` and `/tmp`, no Linux capabilities, `no-new-privileges` | Spec section 8, milestone 8 | Planned |
+| Dashboard warns about readings that look wrong: out-of-range values, `seq` jumps, `ts` far from `received_at`, unknown `node_id` | Spec 6.3, milestone 7 | Planned |
+| ESP32 flash encryption | Spec 5.5 | Open decision above |
+
+If a node is lost or stolen, rotate the API key.
 
 ## Decisions
 
@@ -80,6 +94,7 @@ Carlos runs the steps that need `sudo`.
 ## Known gaps
 
 - `seq` reset: a restarted count is treated as duplicates and lost, until the `boot_id` decision above.
+- Anyone holding the API key can send readings with `seq` numbers the node hasn't used yet, so its real readings are later dropped as duplicates. The dashboard warnings make this visible, and rotating the key stops it. `boot_id` alone doesn't prevent it.
 - `--gap` in `fake_node.py` simulates the server being unreachable, so no data is missing. The
   30-minute cap for real data loss is covered by a unit test.
 - Readings with `ts_synced=false` count in summaries at the time the node reported.
