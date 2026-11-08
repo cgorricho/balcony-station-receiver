@@ -3,6 +3,10 @@
 Stores readings sent over home WiFi by the balcony ESP32 sensor node. It runs on
 native Windows and nothing leaves the LAN.
 
+> **Moving to a VPS.** The plan changed on 2026-11-07. The steps below describe the
+> Windows setup and will be replaced in milestone 9. See the
+> [build plan](docs/BUILD_PLAN.md).
+
 - Build spec: [docs/build-spec.html](docs/build-spec.html)
 - Milestones and decisions: [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md)
 

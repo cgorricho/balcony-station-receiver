@@ -11,31 +11,37 @@ hr{border:none;border-top:1px solid #d0d7de;margin:2em 0}
 @media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3} code,pre,th{background:#161b22} th,td,h1,h2,hr{border-color:#30363d}}
 </style></head><body>
 <h1>Balcony Station Receiver — Build Spec</h1>
-<p><strong>For:</strong> Claude Code, running on Carlos's personal Windows laptop
-<strong>Goal:</strong> Create the project folder, Python environment, and a small always-listening receiver that stores readings sent over home WiFi by an ESP32 sensor node on the balcony.</p>
+<p><strong>For:</strong> Claude Code, developing on Carlos's Windows laptop and deploying to his Contabo VPS.
+<strong>Goal:</strong> Run a small always-on receiver on the VPS that stores readings sent over HTTPS by an ESP32 sensor node on the balcony, with a private dashboard to view them.</p>
 <hr />
 <h2>0. Instructions to Claude Code</h2>
 <ul>
-<li>Work on <strong>native Windows</strong> (PowerShell). <strong>Do not use WSL</strong> for this project. WSL2 sits behind a virtual network, so the ESP32 can't reach it without extra setup.</li>
-<li>Project folder, confirmed by Carlos: <code>C:\Users\carlos\Documents\Projects\balcony-station-receiver</code>.</li>
-<li><strong>Ask before running anything that needs admin rights</strong> (firewall rule, scheduled task). Show the exact command first.</li>
+<li>Develop in <code>C:\Users\carlos\Documents\Projects\balcony-station-receiver</code>. Deploy to the VPS with <code>ssh carlosgorrichoai.one</code>.</li>
+<li><strong>The VPS hosts other live sites and services.</strong> Change nothing outside this project without asking. Don't touch other nginx sites or containers.</li>
+<li><strong>Carlos runs anything that needs <code>sudo</code></strong> (nginx, certbot). Show the exact command first.</li>
 <li>Build in the order of Section 9 and confirm each milestone with Carlos before moving on. He prefers one step at a time.</li>
-<li>Initialize a git repo. Never commit <code>.env</code> or the <code>data/</code> folder.</li>
+<li>The GitHub repo is public. Never commit <code>.env</code>, <code>data/</code>, passwords or server security details.</li>
 </ul>
 <hr />
 <h2>1. Context</h2>
 <pre><code>[ESP32-C6 node on balcony, AA batteries]
    wakes every ~10 min → reads sensors → saves reading in its flash memory
-   → tries HTTP POST to laptop → on success, deletes the readings the laptop acknowledged
-                │  (home WiFi, LAN only)
+   → uploads about hourly by HTTPS POST → on success, deletes the readings the VPS acknowledged
+                │  (home WiFi, then the internet, encrypted)
                 ▼
-[This receiver on the Windows laptop]
+[nginx on the VPS: station.carlosgorrichoai.one]
+   TLS, rate limiting, public paths only
+                │
+                ▼
+[This receiver in a Docker container, bound to 127.0.0.1]
    validates → stores in SQLite (no duplicates) → acks highest seq stored with no gaps
+
+[Carlos's browser] → HTTPS → nginx login → /dashboard
 </code></pre>
 <ul>
-<li>The laptop is often asleep or away. <strong>The node buffers readings and resends them in batches.</strong> The receiver must accept batches, tolerate resends and out-of-order data, and never store duplicates.</li>
+<li>Home internet can drop, and hourly uploads save battery compared with uploading every reading. <strong>The node buffers readings and resends them in batches.</strong> The receiver must accept batches, tolerate resends and out-of-order data, and never store duplicates.</li>
 <li>Frost/heat alerts are <strong>not</strong> this receiver's job. The node pushes them directly to Carlos's phone.</li>
-<li>Nothing leaves the LAN. No cloud, no VPS.</li>
+<li>Readings leave the home network, encrypted, and are stored only on Carlos's VPS. No third-party cloud service.</li>
 </ul>
 <hr />
 <h2>2. Environment</h2>
@@ -48,16 +54,16 @@ hr{border:none;border-top:1px solid #d0d7de;margin:2em 0}
 </thead>
 <tbody>
 <tr>
-<td>OS</td>
-<td>Windows 10/11, native</td>
+<td>Server</td>
+<td>Contabo VPS, Ubuntu 22.04, in Docker. The laptop is for development only</td>
 </tr>
 <tr>
 <td>Python</td>
-<td>3.12+</td>
+<td>3.12+, from the container image. The VPS's own Python is 3.10 and stays untouched</td>
 </tr>
 <tr>
 <td>Env/package manager</td>
-<td><code>uv</code> (install it if missing: <code>winget install astral-sh.uv</code>). Fallback: <code>python -m venv .venv</code> + pip</td>
+<td><code>uv</code>, on the laptop and inside the image</td>
 </tr>
 <tr>
 <td>Web framework</td>
@@ -80,8 +86,12 @@ hr{border:none;border-top:1px solid #d0d7de;margin:2em 0}
 <td>pytest + httpx (FastAPI TestClient)</td>
 </tr>
 <tr>
-<td>Optional</td>
-<td><code>zeroconf</code> for mDNS advertising (see 6.3)</td>
+<td>Reverse proxy</td>
+<td>The VPS's existing nginx, with a certbot certificate and basic auth for the dashboard</td>
+</tr>
+<tr>
+<td>Dashboard</td>
+<td>Plotly page served by the receiver (see 6.3)</td>
 </tr>
 </tbody>
 </table>
@@ -100,14 +110,17 @@ hr{border:none;border-top:1px solid #d0d7de;margin:2em 0}
 │   ├── models.py           # Pydantic schemas
 │   ├── db.py               # SQLite init, inserts, queries
 │   ├── config.py           # settings from .env
-│   └── derived.py          # PPFD / DLI calculations
+│   ├── derived.py          # PPFD / DLI calculations
+│   └── dashboard.py        # /dashboard page and charts
 ├── scripts/
 │   ├── fake_node.py        # simulates the ESP32 (batches, resends, gaps)
 │   ├── export_csv.py       # export readings to CSV (°C and °F columns)
 │   ├── daily_summary.py    # min/max temps, DLI, sun window per day
-│   ├── install_firewall.ps1
-│   ├── install_task.ps1    # Task Scheduler, start at logon, hidden via pythonw
-│   └── show_network.ps1    # network profile and DHCP reservation details
+│   └── backup_db.py        # consistent SQLite backup, keeps 14 days
+├── deploy/
+│   ├── Dockerfile
+│   ├── docker-compose.yml  # publishes 127.0.0.1:8765 only
+│   └── nginx-station.conf  # site template for the VPS
 ├── docs/
 │   ├── build-spec.html     # copy of this spec
 │   └── BUILD_PLAN.md       # milestone status and decisions
@@ -128,10 +141,26 @@ STATION_API_KEY=&lt;generate a random 32-char token on first setup&gt;
 STATION_DB_PATH=data/station.db
 STATION_LOG_DIR=logs
 STATION_TZ=America/New_York
+STATION_LUX_PER_PPFD=54
+STATION_SUN_THRESHOLD_LUX=20000
+STATION_FORWARDED_ALLOW_IPS=&lt;the Docker gateway address nginx connects from&gt;
 </code></pre>
+<p><code>STATION_HOST</code> is <code>0.0.0.0</code> inside the container only. Docker publishes the port on <code>127.0.0.1</code>, so the service is reachable only through nginx. On the VPS, <code>.env</code> is readable by Carlos's account only (<code>chmod 600</code>).</p>
 <hr />
 <h2>5. API contract (the ESP32 firmware will be written to match this exactly)</h2>
+<p>The node connects to <code>https://station.carlosgorrichoai.one</code>. <strong>HTTPS is required</strong>, and the node must verify the server certificate. Plain HTTP would expose the API key.</p>
 <p>All requests from the node carry the header <code>X-Station-Key: &lt;STATION_API_KEY&gt;</code>. A missing or wrong key returns <code>401</code>.</p>
+<table>
+<thead>
+<tr><th>Path</th><th>Reachable from</th></tr>
+</thead>
+<tbody>
+<tr><td><code>POST /api/v1/readings</code>, <code>GET /api/v1/time</code></td><td>The internet, rate limited</td></tr>
+<tr><td><code>/dashboard</code></td><td>The internet, behind the nginx login</td></tr>
+<tr><td><code>/api/v1/health</code>, <code>/api/v1/latest</code></td><td>The VPS only. nginx returns <code>404</code></td></tr>
+<tr><td>Everything else, including <code>/docs</code></td><td>Nowhere. Turned off in the app, and nginx returns <code>404</code></td></tr>
+</tbody>
+</table>
 <h3>5.1 <code>POST /api/v1/readings</code></h3>
 <p>Request body:</p>
 <pre><code class="language-json">{
@@ -175,11 +204,11 @@ STATION_TZ=America/New_York
 </ul>
 <p>Validation errors return <code>422</code> with details. The receiver must never crash on bad input.</p>
 <h3>5.2 <code>GET /api/v1/time</code></h3>
-<p>Returns <code>{ "server_ts": &lt;epoch UTC&gt; }</code>. The node can use this to set its clock without internet NTP. No API key required.</p>
+<p>Returns <code>{ "server_ts": &lt;epoch UTC&gt; }</code>. The node needs a valid clock before it can verify the certificate, so it should use NTP first and treat this as a check. No API key required.</p>
 <h3>5.3 <code>GET /api/v1/health</code></h3>
-<p>Returns <code>{ "status": "ok", "db": "ok", "last_reading_at": &lt;epoch|null&gt;, "nodes": ["balcony-01"] }</code>. If the database can't be read, it returns <code>503</code> with <code>status</code> and <code>db</code> set to <code>"error"</code>. No API key required.</p>
+<p>Returns <code>{ "status": "ok", "db": "ok", "last_reading_at": &lt;epoch|null&gt;, "nodes": ["balcony-01"] }</code>. If the database can't be read, it returns <code>503</code> with <code>status</code> and <code>db</code> set to <code>"error"</code>. No API key required, but only reachable on the VPS (for example over <code>ssh</code>).</p>
 <h3>5.4 <code>GET /api/v1/latest?node_id=balcony-01</code></h3>
-<p>Returns the reading with the highest <code>seq</code> (its metrics plus <code>seq</code>, <code>ts</code>, <code>ts_synced</code>, <code>received_at</code>, <code>fw_version</code>), for quick checks from a browser. An unknown node returns <code>404</code>. Requires the API key, sent as a header (preferred) or <code>?key=</code> query parameter. Query strings must never reach the logs: mask the key or turn off Uvicorn's access log.</p>
+<p>Returns the reading with the highest <code>seq</code> (its metrics plus <code>seq</code>, <code>ts</code>, <code>ts_synced</code>, <code>received_at</code>, <code>fw_version</code>), for quick checks on the VPS. An unknown node returns <code>404</code>. Requires the API key, sent as a header only. The <code>?key=</code> option is removed, because nginx logs full URLs. The dashboard replaces the browser check.</p>
 <hr />
 <h2>6. Storage</h2>
 <h3>6.1 Schema (long format, so adding sensors needs no schema changes)</h3>
@@ -188,7 +217,7 @@ STATION_TZ=America/New_York
   seq          INTEGER NOT NULL,
   ts           INTEGER NOT NULL,     -- node clock, epoch UTC
   ts_synced    INTEGER NOT NULL,     -- 0/1
-  received_at  INTEGER NOT NULL,     -- laptop clock, epoch UTC
+  received_at  INTEGER NOT NULL,     -- server clock, epoch UTC
   fw_version   TEXT,
   PRIMARY KEY (node_id, seq)
 );
@@ -218,24 +247,34 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <li><strong>Sun window</strong>: first and last time each day that lux is above a threshold (default 20,000 lux, configurable), as a rough "direct sun on the railing" indicator.</li>
 <li><code>c_to_f(c) = c × 9/5 + 32</code>.</li>
 </ul>
-<h3>6.3 Optional: mDNS</h3>
-<p>Advertise <code>_station._tcp.local</code> with <code>zeroconf</code>, so the node can find the laptop by name if the IP address changes. A DHCP reservation on the router is the primary plan (Section 8). Implement this only if Carlos asks.</p>
+<h3>6.3 Dashboard (<code>dashboard.py</code>)</h3>
+<ul>
+<li>A read-only page at <code>/dashboard</code>, served by the receiver. It needs no second service.</li>
+<li>Charts for the last 7 days: air and tray temperature (°F), lux, pellet moisture and battery voltage, each with a marker for gaps in the data.</li>
+<li>Today's latest reading, and the daily summary table from <code>derived.py</code>.</li>
+<li>Plotly's JavaScript is served by the app, not a third-party CDN.</li>
+<li>Works on a phone.</li>
+<li>Login is nginx basic auth. The app has no user accounts, so the dashboard must never be published except through nginx.</li>
+</ul>
 <hr />
 <h2>7. Scripts</h2>
 <ul>
-<li><strong><code>fake_node.py</code></strong>: posts realistic fake data (daytime light curve, temperatures that drop overnight). Flags: <code>--batch N</code>, <code>--resend</code> (repeats the last batch to test duplicate handling), <code>--gap HOURS</code> (simulates the laptop being away), <code>--host</code>, <code>--key</code>.</li>
+<li><strong><code>fake_node.py</code></strong>: posts realistic fake data (daytime light curve, temperatures that drop overnight). Flags: <code>--batch N</code>, <code>--resend</code> (repeats the last batch to test duplicate handling), <code>--gap HOURS</code> (simulates the VPS being unreachable), <code>--url</code> (full base URL, so it can test HTTPS), <code>--key</code>.</li>
 <li><strong><code>export_csv.py</code></strong>: wide CSV with one row per reading and one column per metric, plus <code>*_f</code> columns for temperatures. Flags: <code>--from</code>, <code>--to</code> dates, <code>--node</code>.</li>
 <li><strong><code>daily_summary.py</code></strong>: a table per day with min/max air temperature (°F), min/max tray temperature (°F), hours below 45°F, DLI, sun window start/end, data coverage %.</li>
+<li><strong><code>backup_db.py</code></strong>: a consistent copy using SQLite's backup API, safe while the receiver runs. Keeps 14 daily copies. Runs nightly from Carlos's cron.</li>
 </ul>
 <hr />
-<h2>8. Windows setup (each step needs Carlos's OK; admin where noted)</h2>
+<h2>8. VPS setup (each step needs Carlos's OK; he runs anything that needs <code>sudo</code>)</h2>
 <ol>
-<li><strong>Network profile:</strong> leave it as it is. The network stays <strong>Public</strong>, because switching to Private would change other apps' firewall rules and turn on Network Discovery.</li>
-<li><strong>Firewall</strong> (admin): <code>install_firewall.ps1</code> creates one inbound rule for TCP 8765, allowing only the home subnet:
-   <code>New-NetFirewallRule -DisplayName "Balcony Station Receiver" -Direction Inbound -Protocol TCP -LocalPort 8765 -Profile Public,Private -RemoteAddress 10.0.0.0/24 -Action Allow</code></li>
-<li><strong>Auto-start:</strong> <code>install_task.ps1</code> registers a Task Scheduler task that runs at logon for the current user, starts the server without a console window, restarts on failure (3 tries, 1 minute apart), and has no time limit. After a reboot the receiver does not run until Carlos logs in; the node keeps buffering until then.</li>
-<li><strong>DHCP reservation:</strong> this is a manual router step. Print instructions telling Carlos to look up the laptop's WiFi MAC address (<code>Get-NetAdapter -Name Wi-Fi</code>) and reserve its current IP address in the router's admin page. Print the current IPv4 address (<code>Get-NetIPAddress -InterfaceAlias Wi-Fi -AddressFamily IPv4</code>) so he knows what to reserve.</li>
-<li><strong>Smoke test from another device:</strong> open <code>http://&lt;laptop-ip&gt;:8765/api/v1/health</code> from a phone on the same WiFi.</li>
+<li><strong>Readiness:</strong> before deploying, confirm who else can log in, check <code>ufw</code>, and check from outside whether services published on <code>0.0.0.0</code> are reachable. Docker-published ports usually bypass <code>ufw</code>.</li>
+<li><strong>DNS:</strong> add an A record for <code>station.carlosgorrichoai.one</code> pointing to the VPS.</li>
+<li><strong>Container:</strong> clone to <code>~/apps/balcony-station-receiver</code>, create <code>.env</code> with a new API key, and run <code>docker compose up -d</code>. The compose file sets <code>restart: unless-stopped</code>, publishes <code>127.0.0.1:8765</code> only, and keeps <code>data/</code> and <code>logs/</code> in mounted folders. Docker group membership covers this step, so no <code>sudo</code> is needed.</li>
+<li><strong>nginx</strong> (sudo): install <code>deploy/nginx-station.conf</code> as a new site. It allows the paths in Section 5 only, limits request size to 1 MB, rate limits the public paths, and adds <code>auth_basic</code> to <code>/dashboard</code>. Test with <code>nginx -t</code> before reloading, because other live sites share this nginx.</li>
+<li><strong>Certificate</strong> (sudo): issue it with <code>certbot --nginx -d station.carlosgorrichoai.one</code>.</li>
+<li><strong>Dashboard login</strong> (sudo): create the password file with <code>htpasswd</code>, outside the repo.</li>
+<li><strong>Backups:</strong> add a nightly cron entry for <code>backup_db.py</code>. Keep at least one copy off the VPS, because a copy on the same disk doesn't survive losing the server.</li>
+<li><strong>Smoke test:</strong> from a phone on mobile data, open the dashboard and log in.</li>
 </ol>
 <hr />
 <h2>9. Build order and acceptance criteria</h2>
@@ -245,16 +284,20 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <li><strong>Other endpoints:</strong> <code>/time</code>, <code>/health</code>, <code>/latest</code>, with tests.</li>
 <li><strong>Derived values and scripts:</strong> DLI test using a synthetic day with known lux values gives the expected value within 1%. Fake node, CSV export and daily summary all run against a test database.</li>
 <li><strong>Logging:</strong> a rotating file log in <code>logs/</code> (5 × 1 MB) records each batch (node, stored, duplicates, ack_seq, client IP) and every error. A test confirms the API key never appears in the log.</li>
-<li><strong>Windows integration:</strong> firewall rule, scheduled task, DHCP reservation instructions. Server survives a reboot and login. Health check is reachable from a phone.</li>
-<li><strong>README:</strong> how to start and stop the server, view the latest reading, export CSV, run the daily summary, rotate the API key, and uninstall (remove the task and firewall rule).</li>
+<li><strong>Production hardening:</strong> remove <code>?key=</code>; turn off <code>/docs</code>, <code>/redoc</code> and <code>/openapi.json</code>; trust forwarded client IPs from <code>STATION_FORWARDED_ALLOW_IPS</code> only; give <code>fake_node.py</code> a <code>--url</code> flag. Remove the Windows install scripts. Tests cover each change.</li>
+<li><strong>Dashboard:</strong> the page in 6.3, with tests for empty data, gaps and text metrics.</li>
+<li><strong>Packaging:</strong> Dockerfile, compose file, nginx template and <code>backup_db.py</code>. The image builds and passes the Done-when scenario locally on Linux. A restored backup opens and holds the expected rows.</li>
+<li><strong>README:</strong> rewritten for the VPS: deploy, update, start and stop, view the dashboard, export CSV, run the daily summary, rotate the API key, restore a backup, and remove the site.</li>
+<li><strong>Server readiness:</strong> Section 8, steps 1 and 2.</li>
+<li><strong>Deploy:</strong> Section 8, steps 3 to 7.</li>
+<li><strong>End-to-end:</strong> the Done-when scenario below, over the real HTTPS address.</li>
 </ol>
-<p><strong>Done when:</strong> <code>fake_node.py</code> running from a second terminal can push 24 hours of simulated data, including one resend and one 6-hour gap. The database then holds no duplicates, and <code>daily_summary.py</code> prints a correct table.</p>
+<p><strong>Done when:</strong> <code>fake_node.py</code> running from the laptop pushes 24 hours of simulated data to the public HTTPS address, as a throwaway node ID, including one resend and one 6-hour gap. The database then holds no duplicates, <code>daily_summary.py</code> prints a correct table, and the dashboard shows the same data. From outside the VPS, <code>/docs</code>, <code>/api/v1/health</code> and <code>/api/v1/latest</code> return <code>404</code>, <code>/dashboard</code> returns <code>401</code> without a login, and port 8765 is closed. The test data is then removed. The API key appears in no log, including nginx's.</p>
 <hr />
 <h2>10. Out of scope (for now)</h2>
 <ul>
-<li>ESP32 firmware (separate project; it will follow Section 5)</li>
+<li>ESP32 firmware (separate project; it will follow Section 5, including HTTPS, certificate checks and hourly uploads)</li>
 <li>Phone alerts (handled by the node, via ntfy)</li>
-<li>Dashboards (a later option is local Grafana or a simple matplotlib/plotly script)</li>
 <li>Hydroponic bottle sensors (water level, EC, solution temperature). These will arrive as new metric names and need no receiver changes.</li>
 </ul>
 </body></html>
