@@ -101,10 +101,16 @@ def test_latest_with_header(client):
     assert body["fw_version"] == "0.1.0"
 
 
-def test_latest_with_query_key(client):
+def test_latest_refuses_a_correct_key_in_the_url(client):
+    # nginx logs full URLs, so the key is only accepted as a header.
     post(client, [1])
     response = client.get(LATEST, params={"node_id": "balcony-01", "key": KEY})
-    assert response.status_code == 200
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"])
+def test_api_docs_are_turned_off(client, path):
+    assert client.get(path).status_code == 404
 
 
 def test_latest_uses_highest_seq_even_if_sent_out_of_order(client):

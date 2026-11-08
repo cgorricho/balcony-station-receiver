@@ -1,10 +1,15 @@
 """Simulate the ESP32 node: buffer readings and send them in batches.
 
 Like the real node, it drops readings only once the receiver acknowledges them.
-With --gap, it keeps buffering while the laptop is away, then catches up.
+With --gap, it keeps buffering while the receiver is unreachable, then catches up.
 
-Example:
+By default it asks /latest where the node left off, so reruns don't reuse seqs.
+The public address hides /latest, so pass --first-seq there, with a throwaway
+--node.
+
+Examples:
     uv run python scripts/fake_node.py --start 2026-01-15 --gap 6 --resend
+    uv run python scripts/fake_node.py --url https://station.example.com --node test-01 --first-seq 1
 """
 
 import argparse
@@ -32,14 +37,30 @@ def batch_size(value: str) -> int:
     return size
 
 
+def base_url(value: str) -> str:
+    if not value.startswith(("http://", "https://")):
+        raise argparse.ArgumentTypeError("must start with http:// or https://")
+    return value.rstrip("/")
+
+
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--host", default="127.0.0.1:8765", help="host or host:port")
+    parser.add_argument(
+        "--url",
+        type=base_url,
+        default="http://127.0.0.1:8765",
+        help="receiver base URL, http:// or https://",
+    )
+    parser.add_argument(
+        "--first-seq", type=int, help="first seq to send; skips the /latest lookup"
+    )
     parser.add_argument("--key", help="API key (default: from .env)")
     parser.add_argument("--node", default="balcony-01")
     parser.add_argument("--batch", type=batch_size, default=6, help="readings per POST")
     parser.add_argument("--resend", action="store_true", help="repeat the last batch at the end")
-    parser.add_argument("--gap", type=float, default=0, help="hours the laptop is away, mid-run")
+    parser.add_argument(
+        "--gap", type=float, default=0, help="hours the receiver is unreachable, mid-run"
+    )
     parser.add_argument("--hours", type=float, default=24, help="simulated hours")
     parser.add_argument("--interval", type=int, default=600, help="seconds between readings")
     parser.add_argument("--start", type=date.fromisoformat, help="first local day, YYYY-MM-DD")
@@ -103,12 +124,16 @@ class Sender:
 
 def first_position(client: httpx.Client, base: str, args, tz: ZoneInfo) -> tuple[int, int]:
     """Continue after the node's latest reading, so reruns don't reuse seqs."""
-    response = client.get(f"{base}/latest", params={"node_id": args.node})
     latest = None
-    if response.status_code != 404:
-        response.raise_for_status()
-        latest = response.json()
-    seq = latest["seq"] + 1 if latest else 1
+    if args.first_seq is None:
+        response = client.get(f"{base}/latest", params={"node_id": args.node})
+        if response.status_code != 404:
+            response.raise_for_status()
+            latest = response.json()
+    if args.first_seq is not None:
+        seq = args.first_seq
+    else:
+        seq = latest["seq"] + 1 if latest else 1
     if args.start:
         return seq, day_bounds(args.start, tz)[0]
     if latest:
@@ -123,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     key = args.key or settings.api_key
     tz = ZoneInfo(settings.tz if settings else "America/New_York")
     rng = random.Random(args.seed)
-    base = f"http://{args.host}/api/v1"
+    base = f"{args.url}/api/v1"
     total = int(args.hours * 3600 / args.interval)
     gap_start = total // 2
     gap_end = gap_start + int(args.gap * 3600 / args.interval)

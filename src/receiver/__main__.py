@@ -8,14 +8,16 @@ from .main import create_app
 
 def main() -> None:
     settings = load_settings()
-    # access_log=False keeps ?key= out of the logs. log_config=None leaves
-    # logging to configure_logging, and works under pythonw, which has no console.
+    # The app logs each request itself, so uvicorn's access log stays off.
+    # log_config=None leaves logging to configure_logging. proxy_headers=False
+    # because the app applies STATION_FORWARDED_ALLOW_IPS itself.
     uvicorn.run(
         create_app(settings),
         host=settings.host,
         port=settings.port,
         access_log=False,
         log_config=None,
+        proxy_headers=False,
     )
 
 

@@ -1,11 +1,11 @@
 # Balcony Station Receiver
 
-Stores readings sent over home WiFi by the balcony ESP32 sensor node. It runs on
-native Windows and nothing leaves the LAN.
+Stores readings sent over HTTPS by the balcony ESP32 sensor node, and runs on a
+VPS behind nginx.
 
-> **Moving to a VPS.** The plan changed on 2026-11-07. The steps below describe the
-> Windows setup and will be replaced in milestone 9. See the
-> [build plan](docs/BUILD_PLAN.md).
+> **Moving to a VPS.** The plan changed on 2026-11-07. The Windows install scripts
+> are gone, and the steps below cover running it locally for development. Milestone
+> 9 rewrites this README for the VPS. See the [build plan](docs/BUILD_PLAN.md).
 
 - Build spec: [docs/build-spec.html](docs/build-spec.html)
 - Milestones and decisions: [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md)
@@ -23,69 +23,25 @@ uv run pytest
 If `.env` is missing, copy `.env.example` to `.env` and set a key (see
 [Rotate the API key](#rotate-the-api-key)).
 
-## Windows integration
+## Run it
 
-1. Check the network and get the details for your router:
-
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts\show_network.ps1
-   ```
-
-   The laptop can be wired or on WiFi, as long as it's on the same network as the
-   node. The network can stay Public.
-
-2. Add the firewall rule, from an **Administrator** PowerShell:
-
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts\install_firewall.ps1
-   ```
-
-   This opens port 8765 to `10.0.0.0/24` only. Add `-Subnet` if your home network
-   uses a different range.
-
-3. Register auto-start. Use an Administrator PowerShell if Windows denies access:
-
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts\install_task.ps1
-   ```
-
-4. Reserve the laptop's IP address on your router, using the details from step 1.
-5. Reboot and log in, then open `http://<laptop-ip>:8765/api/v1/health` on a phone
-   on the same WiFi.
-
-Add `-DryRun` to either install script to see what it would do without changing
-anything.
-
-The receiver starts when you log in, not when the laptop boots. While it's
-stopped, the node keeps buffering and catches up later.
-
-## Start and stop
-
-If the scheduled task is installed:
-
-```powershell
-Start-ScheduledTask -TaskName "Balcony Station Receiver"
-Stop-ScheduledTask -TaskName "Balcony Station Receiver"
-```
-
-To run it in a terminal instead, where Ctrl+C stops it:
+In a terminal, where Ctrl+C stops it:
 
 ```powershell
 uv run python -m receiver
 ```
 
 Always start it this way rather than calling `uvicorn` directly. This entry point
-turns off the access log, which would otherwise record `?key=` values.
+turns off uvicorn's access log and its own proxy-header handling, which the app
+does itself from `STATION_FORWARDED_ALLOW_IPS`.
+
+The API docs pages (`/docs`, `/redoc`, `/openapi.json`) are turned off. The API is
+described in the [spec](docs/build-spec.html).
 
 ## View the latest reading
 
-In a browser, with your key from `.env`:
-
-```text
-http://localhost:8765/api/v1/latest?node_id=balcony-01&key=YOUR_KEY
-```
-
-The key then stays in your browser history. The header avoids that:
+The API key goes in the `X-Station-Key` header only. A key in the URL is refused,
+because nginx logs full URLs.
 
 ```powershell
 curl.exe -H "X-Station-Key: YOUR_KEY" "http://localhost:8765/api/v1/latest?node_id=balcony-01"
@@ -118,6 +74,9 @@ so point `STATION_DB_PATH` at a scratch file first if you want to keep it clean.
 uv run python scripts/fake_node.py --gap 6 --resend
 ```
 
+`--url` sets the receiver's address (default `http://127.0.0.1:8765`). The public
+address hides `/latest`, so there use a throwaway `--node` and `--first-seq 1`.
+
 ## Rotate the API key
 
 1. Generate a new key:
@@ -135,21 +94,8 @@ uv run python scripts/fake_node.py --gap 6 --resend
 - `logs/receiver.log` holds each batch and every error. It rotates at 1 MB and
   keeps 5 files. API keys are redacted.
 - `data/station.db` holds the readings. Back up this file (and any
-  `station.db-wal` beside it) with the receiver stopped.
-
-## Uninstall
-
-Remove the task, then the firewall rule from an **Administrator** PowerShell:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install_task.ps1 -Uninstall
-```
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install_firewall.ps1 -Uninstall
-```
-
-Then delete the project folder. That also deletes your readings in `data/`.
+  `station.db-wal` beside it) with the receiver stopped. Milestone 8 adds a backup
+  script that works while it runs.
 
 ## Known limitations
 

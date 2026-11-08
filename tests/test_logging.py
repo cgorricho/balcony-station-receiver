@@ -5,7 +5,6 @@ import sqlite3
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import httpx
 import pytest
@@ -61,6 +60,38 @@ def test_invalid_body_is_logged(client, settings):
     assert "invalid request: client=testclient path=/api/v1/readings" in log_text(settings)
 
 
+def post_via(settings, peer, forwarded_for):
+    """Send a batch from `peer`, as nginx would, with an X-Forwarded-For header."""
+    client = TestClient(create_app(settings), client=(peer, 50000))
+    headers = {**HEADERS, "X-Forwarded-For": forwarded_for}
+    assert client.post("/api/v1/readings", json=batch(), headers=headers).status_code == 200
+    return log_text(settings)
+
+
+@pytest.mark.parametrize(
+    "allow, peer, logged",
+    [
+        # A trusted proxy, by network or exact address: log the real client.
+        ("172.18.0.0/16", "172.18.0.1", "203.0.113.9"),
+        ("127.0.0.1", "127.0.0.1", "203.0.113.9"),
+        # Anyone else sending the header can't fake their address.
+        ("172.18.0.0/16", "198.51.100.7", "198.51.100.7"),
+        ("127.0.0.1", "198.51.100.7", "198.51.100.7"),
+        # An empty setting trusts no one.
+        ("", "127.0.0.1", "127.0.0.1"),
+    ],
+)
+def test_forwarded_client_ip_only_from_trusted_proxies(tmp_path, allow, peer, logged):
+    settings = Settings(
+        api_key=KEY,
+        db_path=tmp_path / "station.db",
+        log_dir=tmp_path / "logs",
+        forwarded_allow_ips=allow,
+    )
+    text = post_via(settings, peer, "203.0.113.9")
+    assert f"ack_seq=2 client={logged}\n" in text
+
+
 def test_unhandled_error_is_logged_with_traceback(client, settings):
     conn = sqlite3.connect(settings.db_path)
     conn.execute("DROP TABLE metrics")
@@ -108,12 +139,6 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def windowless_python():
-    """The Windows task runs under pythonw, which has no console streams."""
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    return pythonw if pythonw.exists() else Path(sys.executable)
-
-
 def test_real_server_keeps_key_out_of_all_output(tmp_path):
     port = free_port()
     env = {
@@ -125,7 +150,7 @@ def test_real_server_keeps_key_out_of_all_output(tmp_path):
         "STATION_LOG_DIR": str(tmp_path / "logs"),
     }
     server = subprocess.Popen(
-        [str(windowless_python()), "-m", "receiver"],
+        [sys.executable, "-m", "receiver"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -141,9 +166,10 @@ def test_real_server_keeps_key_out_of_all_output(tmp_path):
         else:
             pytest.fail("server did not start")
         assert httpx.post(f"{base}/readings", json=batch(), headers=HEADERS).status_code == 200
-        latest = httpx.get(f"{base}/latest", params={"node_id": "balcony-01", "key": KEY})
+        latest = httpx.get(f"{base}/latest", params={"node_id": "balcony-01"}, headers=HEADERS)
         assert latest.status_code == 200
-        assert httpx.get(f"{base}/latest", params={"node_id": "x", "key": "wrong"}).status_code == 401
+        # A key in the URL is no longer accepted, so a stray one is just refused.
+        assert httpx.get(f"{base}/latest", params={"node_id": "x", "key": KEY}).status_code == 401
     finally:
         server.terminate()
         output, _ = server.communicate(timeout=10)

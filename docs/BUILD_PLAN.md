@@ -20,16 +20,16 @@ postponed about two weeks, but milestones 6 to 9 don't depend on it.
 | 3 | Other endpoints: `/time`, `/health`, `/latest` | Done | Claude |
 | 4 | Derived values and scripts | Done | Claude |
 | 5 | Logging: rotating file log with the API key redacted | Done | Claude |
-| 6 | Production hardening: no `?key=`, no `/docs`, forwarded IPs, `fake_node.py --url`, remove Windows scripts | Next | Claude |
-| 7 | Dashboard at `/dashboard`, with warnings for readings that look wrong | Not started | Claude |
+| 6 | Production hardening: no `?key=`, no `/docs`, forwarded IPs, `fake_node.py --url`, remove Windows scripts | Done | Claude |
+| 7 | Dashboard at `/dashboard`, with warnings for readings that look wrong | Next | Claude |
 | 8 | Packaging: Dockerfile, compose, nginx template, backups; container runs non-root and read-only | Not started | Claude |
 | 9 | README rewritten for the VPS | Not started | Claude |
 | 10 | Server readiness | Not started | Carlos and Claude |
 | 11 | Deploy | Not started | Carlos and Claude |
 | 12 | End-to-end over the real HTTPS address | Not started | Claude |
 
-The earlier Windows integration milestone is retired. Its scripts stay in the repo until
-milestone 6 removes them.
+The earlier Windows integration milestone is retired. Milestone 6 removed its scripts; they
+remain in git history.
 
 ## Milestone 10: server readiness
 
@@ -88,7 +88,9 @@ If a node is lost or stolen, rotate the API key.
 | Error responses never echo the input | The default echo can fail on `NaN` or invalid unicode |
 | Undecodable bodies return `422`, not FastAPI's `400` | The contract says malformed bodies return `422` |
 | Added the `tzdata` dependency | The slim container image has no timezone database, like Windows |
-| `python -m receiver` is the only supported launch | It turns off the access log |
+| `python -m receiver` is the only supported launch | It turns off uvicorn's access log and proxy-header handling |
+| Forwarded client IPs handled in the app, trusted only from `STATION_FORWARDED_ALLOW_IPS` (default `127.0.0.1`, empty trusts no one) | Testable without a real proxy, and an outside sender can't fake its address in the log |
+| `fake_node.py --first-seq` skips the `/latest` lookup | The public address hides `/latest`, and milestone 12 runs through it |
 | Log redacts the key as well | A traceback must not leak it |
 
 ## Known gaps

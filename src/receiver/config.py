@@ -21,6 +21,9 @@ class Settings:
     tz: str = "America/New_York"
     lux_per_ppfd: float = DEFAULT_LUX_PER_PPFD
     sun_threshold_lux: float = DEFAULT_SUN_THRESHOLD_LUX
+    # Comma-separated proxy addresses or networks whose X-Forwarded-For is
+    # trusted. Empty trusts no one.
+    forwarded_allow_ips: str = "127.0.0.1"
 
 
 def _resolve(value: str) -> Path:
@@ -44,4 +47,5 @@ def load_settings() -> Settings:
         sun_threshold_lux=float(
             os.environ.get("STATION_SUN_THRESHOLD_LUX", DEFAULT_SUN_THRESHOLD_LUX)
         ),
+        forwarded_allow_ips=os.environ.get("STATION_FORWARDED_ALLOW_IPS", "127.0.0.1"),
     )

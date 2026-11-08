@@ -50,7 +50,7 @@ def server(db_path):
     while not instance.started:
         time.sleep(0.05)
     port = instance.servers[0].sockets[0].getsockname()[1]
-    yield f"127.0.0.1:{port}"
+    yield f"http://127.0.0.1:{port}"
     instance.should_exit = True
     thread.join(timeout=10)
 
@@ -58,7 +58,7 @@ def server(db_path):
 @pytest.fixture(scope="module")
 def fake_run(server):
     result = run_script(
-        "fake_node.py", "--host", server, "--key", KEY, "--start", DAY, "--gap", 6, "--resend"
+        "fake_node.py", "--url", server, "--key", KEY, "--start", DAY, "--gap", 6, "--resend"
     )
     assert result.returncode == 0, result.stderr
     return result
@@ -86,11 +86,11 @@ def test_fake_node_delivers_everything_once(fake_run, db_path):
 
 def test_rerun_continues_seq_instead_of_colliding(server, fake_run):
     result = run_script(
-        "fake_node.py", "--host", server, "--key", KEY, "--node", "other", "--hours", 1
+        "fake_node.py", "--url", server, "--key", KEY, "--node", "other", "--hours", 1
     )
     assert "stored=6" in result.stdout
     again = run_script(
-        "fake_node.py", "--host", server, "--key", KEY, "--node", "other", "--hours", 1
+        "fake_node.py", "--url", server, "--key", KEY, "--node", "other", "--hours", 1
     )
     assert "stored=6" in again.stdout
     assert "duplicates=0" in again.stdout
@@ -157,3 +157,22 @@ def test_scripts_report_a_missing_database(tmp_path):
         assert result.returncode == 1
         assert "Database not found" in result.stderr
     assert not (tmp_path / "missing.db").exists()
+
+
+def test_first_seq_skips_the_latest_lookup(server, fake_run, db_path):
+    # Over the public address /latest is hidden, so the run must not depend on it.
+    result = run_script(
+        "fake_node.py", "--url", server + "/", "--key", KEY, "--node", "throwaway",
+        "--hours", 1, "--first-seq", 500,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "stored=6" in result.stdout
+    seqs = scalar(db_path, "SELECT GROUP_CONCAT(seq) FROM readings WHERE node_id = 'throwaway'")
+    assert sorted(map(int, seqs.split(","))) == list(range(500, 506))
+
+
+@pytest.mark.parametrize("url", ["127.0.0.1:8765", "ftp://example.com"])
+def test_fake_node_rejects_a_url_without_http(url):
+    result = run_script("fake_node.py", "--url", url, "--key", KEY)
+    assert result.returncode == 2
+    assert "must start with http:// or https://" in result.stderr

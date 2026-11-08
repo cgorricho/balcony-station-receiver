@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from . import db
 from .config import Settings, load_settings
@@ -85,7 +86,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(settings)
     db.init_db(settings.db_path)
 
-    app = FastAPI(title="Balcony Station Receiver", version="0.1.0")
+    # No /docs, /redoc or /openapi.json: the service is public, and its API is
+    # documented in the spec.
+    app = FastAPI(
+        title="Balcony Station Receiver",
+        version="0.1.0",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    if settings.forwarded_allow_ips:
+        # Behind nginx every request comes from the proxy. Take the client IP from
+        # X-Forwarded-For, but only when the proxy is one we trust.
+        trusted = [ip.strip() for ip in settings.forwarded_allow_ips.split(",") if ip.strip()]
+        app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted)
     app.add_exception_handler(RequestValidationError, _validation_error)
     app.add_exception_handler(StarletteHTTPException, _http_error)
     app.add_exception_handler(Exception, _unhandled_error)
@@ -97,12 +111,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def require_key(x_station_key: str | None = Header(default=None)) -> None:
         check_key(x_station_key)
-
-    def require_key_or_query(
-        x_station_key: str | None = Header(default=None),
-        key: str | None = Query(default=None),
-    ) -> None:
-        check_key(x_station_key or key)
 
     @app.post(
         "/api/v1/readings",
@@ -147,7 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get(
         "/api/v1/latest",
         response_model=LatestResponse,
-        dependencies=[Depends(require_key_or_query)],
+        dependencies=[Depends(require_key)],
     )
     def get_latest(node_id: str = Query(min_length=1, max_length=MAX_TEXT)) -> LatestResponse:
         latest = db.latest_reading(settings.db_path, node_id)
