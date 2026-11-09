@@ -154,6 +154,11 @@ def main() -> int:
         summary = run(*exec_, "python", "scripts/daily_summary.py", "--node", "smoke-test", check_rc=False)
         check("daily_summary runs in the container", summary.returncode == 0 and "Coverage" in summary.stdout,
               summary.stderr[-300:] or summary.stdout[-300:])
+        export = run(*exec_, "python", "scripts/export_csv.py", "--node", "smoke-test", check_rc=False)
+        lines = export.stdout.splitlines()
+        check("export_csv writes CSV to stdout in the container",
+              export.returncode == 0 and lines[:1] and "air_temp_c" in lines[0] and len(lines) > 100,
+              export.stderr[-300:])
         status, body = request("/dashboard/data?node=smoke-test&days=7", auth=True)
         points = sum(y is not None for y in json.loads(body)["series"][0]["y"]) if status == 200 else 0
         check("dashboard shows the uploaded readings", points > 100, f"{points} points")
@@ -206,8 +211,11 @@ def main() -> int:
 
         print("Restart keeps the data")
         run(*compose, "restart", "receiver")
-        time.sleep(3)
-        status, body = request("/dashboard/data?node=smoke-test", auth=True)
+        for _ in range(30):  # nginx returns 502 until the receiver is listening again
+            status, body = request("/dashboard/data?node=smoke-test", auth=True)
+            if status != 502:
+                break
+            time.sleep(1)
         check("data survives a restart", status == 200 and json.loads(body)["latest"] is not None, str(status))
     finally:
         print("Removing the stack")

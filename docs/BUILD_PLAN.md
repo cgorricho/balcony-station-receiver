@@ -23,8 +23,8 @@ postponed about two weeks, but milestones 6 to 9 don't depend on it.
 | 6 | Production hardening: no `?key=`, no `/docs`, forwarded IPs, `fake_node.py --url`, remove Windows scripts | Done | Claude |
 | 7 | Dashboard at `/dashboard`, with warnings for readings that look wrong, plus the `simulate.py` signal simulator | Done | Claude |
 | 8 | Packaging: Dockerfile, compose, nginx template, backups; container runs non-root and read-only | Done | Claude |
-| 9 | README rewritten for the VPS | Next | Claude |
-| 10 | Server readiness | Not started | Carlos and Claude |
+| 9 | README rewritten for the VPS | Done | Claude |
+| 10 | Server readiness | Next | Carlos and Claude |
 | 11 | Deploy | Not started | Carlos and Claude |
 | 12 | End-to-end over the real HTTPS address | Not started | Claude |
 
@@ -37,10 +37,11 @@ remain in git history.
 - [ ] Check `ufw` rules (needs `sudo`)
 - [ ] Check from outside which Docker-published ports are reachable, and close any that shouldn't be
 - [ ] Add the DNS record for `station.carlosgorrichoai.one`
+- [ ] Confirm the VPS layout the README assumes: nginx uses `sites-available`/`sites-enabled`, certbot has its nginx plugin, `htpasswd` (`apache2-utils`) is installed, `python3` is 3.10 or newer, and Carlos's account can run `docker` without `sudo`
 
 ## Milestone 11: deploy
 
-Carlos runs the steps that need `sudo`.
+Carlos runs the steps that need `sudo`. The README's Deploy section has the exact commands.
 
 - [ ] Clone the repo and create `.env` on the VPS with a new API key
 - [ ] Check that `172.30.87.0/24` is free (`docker network inspect` on the existing networks), then start the container with `STATION_UID`/`STATION_GID` set
@@ -49,6 +50,7 @@ Carlos runs the steps that need `sudo`.
 - [ ] Create the dashboard login
 - [ ] Add the nightly backup, with one copy off the VPS
 - [ ] Open the dashboard from a phone on mobile data
+- [ ] Check that the receiver's log shows real client addresses, not `172.30.87.1`
 
 ## Open decisions
 
@@ -107,6 +109,8 @@ If a node is lost or stolen, rotate the API key.
 | nginx replaces `X-Forwarded-For` with the connecting address instead of appending | A client can't put a forged address in the receiver's log |
 | Dashboard password file is created after the certificate | The password never crosses plain HTTP |
 | The node waits and resends on `429` (spec 5.1); `fake_node.py` does the same | A long catch-up after an outage must not lose its place |
+| `deploy/compose.sh` wraps `docker compose` and sets `STATION_UID`/`STATION_GID` from `id` | Compose reads interpolation variables from `deploy/`, not the project's `.env`, and forgetting them would give the container the wrong owner for `data/` |
+| Scripts run inside the container with `compose.sh exec`; CSV goes to stdout | The container's filesystem is read-only, and its Python has the dependencies |
 | `backup_db.py` is standard library only and Python 3.10 compatible, and checks each copy's integrity | The VPS's own `python3` runs it from cron, outside the container |
 
 ## Known gaps
