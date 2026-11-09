@@ -101,7 +101,8 @@ hr{border:none;border-top:1px solid #d0d7de;margin:2em 0}
 ├── README.md
 ├── pyproject.toml
 ├── .env.example
-├── .gitignore              # .env, data/, logs/, .venv/
+├── .gitignore              # .env, data/, logs/, backups/, .venv/
+├── .dockerignore           # the image gets src/ and scripts/ only, never .env
 ├── src/receiver/
 │   ├── __init__.py
 │   ├── __main__.py         # python -m receiver starts the server
@@ -123,7 +124,8 @@ hr{border:none;border-top:1px solid #d0d7de;margin:2em 0}
 ├── deploy/
 │   ├── Dockerfile
 │   ├── docker-compose.yml  # publishes 127.0.0.1:8765 only
-│   └── nginx-station.conf  # site template for the VPS
+│   ├── nginx-station.conf  # site template for the VPS
+│   └── local_stack_test.py # runs both locally in Docker and checks Section 5 and 8
 ├── docs/
 │   ├── build-spec.html     # copy of this spec
 │   └── BUILD_PLAN.md       # milestone status and decisions
@@ -146,10 +148,10 @@ STATION_LOG_DIR=logs
 STATION_TZ=America/New_York
 STATION_LUX_PER_PPFD=54
 STATION_SUN_THRESHOLD_LUX=20000
-STATION_FORWARDED_ALLOW_IPS=&lt;the Docker gateway address nginx connects from&gt;
+STATION_FORWARDED_ALLOW_IPS=127.0.0.1   # set by docker-compose.yml on the VPS
 STATION_KNOWN_NODES=balcony-01
 </code></pre>
-<p><code>STATION_HOST</code> is <code>0.0.0.0</code> inside the container only. Docker publishes the port on <code>127.0.0.1</code>, so the service is reachable only through nginx. On the VPS, <code>.env</code> is readable by Carlos's account only (<code>chmod 600</code>).</p>
+<p><code>STATION_HOST</code> is <code>0.0.0.0</code> inside the container only. Docker publishes the port on <code>127.0.0.1</code>, so the service is reachable only through nginx. On the VPS, <code>docker-compose.yml</code> overrides the host, port, database and log paths, and sets <code>STATION_FORWARDED_ALLOW_IPS</code> to the gateway of its own Docker network (<code>172.30.87.1</code>), because that is the address nginx's connections arrive from. Also on the VPS, <code>.env</code> is readable by Carlos's account only (<code>chmod 600</code>).</p>
 <hr />
 <h2>5. API contract (the ESP32 firmware will be written to match this exactly)</h2>
 <p>The node connects to <code>https://station.carlosgorrichoai.one</code>. <strong>HTTPS is required</strong>, and the node must verify the server certificate. Plain HTTP would expose the API key.</p>
@@ -207,6 +209,7 @@ STATION_KNOWN_NODES=balcony-01
 <li>Commit the whole batch in <strong>one transaction</strong> before responding.</li>
 </ul>
 <p>Validation errors return <code>422</code> with details. The receiver must never crash on bad input.</p>
+<p><strong>Rate limit:</strong> nginx allows each address 30 requests a minute on <code>/api/v1/readings</code> and <code>/api/v1/time</code> together, with bursts of 20. Over that it returns <code>429</code>. The node treats <code>429</code> like a failed upload: it keeps the batch, waits, and sends it again. Normal uploads, and catching up after an outage in batches of up to 500 readings, stay well under the limit.</p>
 <h3>5.2 <code>GET /api/v1/time</code></h3>
 <p>Returns <code>{ "server_ts": &lt;epoch UTC&gt; }</code>. The node needs a valid clock before it can verify the certificate, so it should use NTP first and treat this as a check. No API key required.</p>
 <h3>5.3 <code>GET /api/v1/health</code></h3>
@@ -279,14 +282,14 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <li><strong><code>export_csv.py</code></strong>: wide CSV with one row per reading and one column per metric, plus <code>*_f</code> columns for temperatures. Flags: <code>--from</code>, <code>--to</code> dates, <code>--node</code>.</li>
 <li><strong><code>daily_summary.py</code></strong>: a table per day with min/max air temperature (°F), min/max tray temperature (°F), hours below 45°F, DLI, sun window start/end, data coverage %.</li>
 <li><strong><code>simulate.py</code></strong>: a signal simulator for watching the dashboard without hardware. It starts its own receiver on <code>127.0.0.1</code> with a scratch database (<code>data/simulator.db</code>), fills in a few days of history with a frost night and a 3-hour outage, then plays the last day forward one reading every couple of seconds and injects each kind of warning. It never touches the real database.</li>
-<li><strong><code>backup_db.py</code></strong>: a consistent copy using SQLite's backup API, safe while the receiver runs. Keeps 14 daily copies. Runs nightly from Carlos's cron.</li>
+<li><strong><code>backup_db.py</code></strong>: a consistent copy using SQLite's backup API, safe while the receiver runs. Checks the copy's integrity, then keeps the 14 newest daily copies in <code>backups/</code>. Uses only the standard library and runs on Python 3.10, so the VPS's own <code>python3</code> can run it nightly from Carlos's cron.</li>
 </ul>
 <hr />
 <h2>8. VPS setup (each step needs Carlos's OK; he runs anything that needs <code>sudo</code>)</h2>
 <ol>
 <li><strong>Readiness:</strong> before deploying, confirm who else can log in, check <code>ufw</code>, and check from outside whether services published on <code>0.0.0.0</code> are reachable. Docker-published ports usually bypass <code>ufw</code>.</li>
 <li><strong>DNS:</strong> add an A record for <code>station.carlosgorrichoai.one</code> pointing to the VPS.</li>
-<li><strong>Container:</strong> clone to <code>~/apps/balcony-station-receiver</code>, create <code>.env</code> with a new API key, and run <code>docker compose up -d</code>. The compose file sets <code>restart: unless-stopped</code>, publishes <code>127.0.0.1:8765</code> only, and keeps <code>data/</code> and <code>logs/</code> in mounted folders. The container runs as a non-root user, with a read-only filesystem except for those two folders and a small <code>/tmp</code>, all Linux capabilities dropped, and <code>no-new-privileges</code> set. Docker group membership covers this step, so no <code>sudo</code> is needed.</li>
+<li><strong>Container:</strong> clone to <code>~/apps/balcony-station-receiver</code>, create <code>.env</code> with a new API key, and run <code>docker compose up -d</code>. The compose file sets <code>restart: unless-stopped</code>, publishes <code>127.0.0.1:8765</code> only, and keeps <code>data/</code> and <code>logs/</code> in mounted folders. The container runs as a non-root user, with a read-only filesystem except for those two folders and a small <code>/tmp</code>, all Linux capabilities dropped, and <code>no-new-privileges</code> set. It runs as Carlos's UID (<code>STATION_UID</code>, default 1000) so files in <code>data/</code> and <code>logs/</code> belong to his account, and has limits (256 MB memory, half a CPU, 64 processes, 15 MB of Docker logs) so a fault can't starve the other sites. Its Docker network is fixed at <code>172.30.87.0/24</code>; if that clashes with another network on the VPS, pick a free one and change the gateway address in the compose file to match. Docker group membership covers this step, so no <code>sudo</code> is needed.</li>
 <li><strong>nginx</strong> (sudo): install <code>deploy/nginx-station.conf</code> as a new site. It allows the paths in Section 5 only, limits request size to 1 MB, rate limits the public paths, and adds <code>auth_basic</code> to <code>/dashboard</code>. Test with <code>nginx -t</code> before reloading, because other live sites share this nginx.</li>
 <li><strong>Certificate</strong> (sudo): issue it with <code>certbot --nginx -d station.carlosgorrichoai.one</code>.</li>
 <li><strong>Dashboard login</strong> (sudo): create the password file with <code>htpasswd</code>, outside the repo.</li>
@@ -303,7 +306,7 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <li><strong>Logging:</strong> a rotating file log in <code>logs/</code> (5 × 1 MB) records each batch (node, stored, duplicates, ack_seq, client IP) and every error. A test confirms the API key never appears in the log.</li>
 <li><strong>Production hardening:</strong> remove <code>?key=</code>; turn off <code>/docs</code>, <code>/redoc</code> and <code>/openapi.json</code>; trust forwarded client IPs from <code>STATION_FORWARDED_ALLOW_IPS</code> only; give <code>fake_node.py</code> a <code>--url</code> flag. Remove the Windows install scripts. Tests cover each change.</li>
 <li><strong>Dashboard:</strong> the page in 6.3 and the <code>simulate.py</code> signal simulator, with tests for empty data, gaps, text metrics and each warning. The simulator shows every warning on the live page.</li>
-<li><strong>Packaging:</strong> Dockerfile, compose file, nginx template and <code>backup_db.py</code>. The image builds and passes the Done-when scenario locally on Linux, running as the non-root user with the read-only filesystem from Section 8. A restored backup opens and holds the expected rows.</li>
+<li><strong>Packaging:</strong> Dockerfile, compose file, nginx template and <code>backup_db.py</code>. The image builds and passes the Done-when scenario locally on Linux, running as the non-root user with the read-only filesystem from Section 8. A restored backup opens and holds the expected rows. <code>deploy/local_stack_test.py</code> checks all of this, through the nginx template, without touching the VPS.</li>
 <li><strong>README:</strong> rewritten for the VPS: deploy, update, start and stop, view the dashboard, export CSV, run the daily summary, rotate the API key, restore a backup, and remove the site.</li>
 <li><strong>Server readiness:</strong> Section 8, steps 1 and 2.</li>
 <li><strong>Deploy:</strong> Section 8, steps 3 to 7.</li>

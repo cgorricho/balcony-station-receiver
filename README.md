@@ -96,6 +96,31 @@ uv run python scripts/fake_node.py --gap 6 --resend
 `--url` sets the receiver's address (default `http://127.0.0.1:8765`). The public
 address hides `/latest`, so there use a throwaway `--node` and `--first-seq 1`.
 
+## Check the deployment files locally
+
+The files in `deploy/` are what the VPS will run: the image, the compose file and
+the nginx site. With Docker running, this builds the image and runs both on a
+scratch folder, then checks the container hardening, the public paths, an upload
+through nginx, the logs and a backup. It removes everything when it's done and
+never touches `data/` or the VPS.
+
+```bash
+docker compose -f deploy/docker-compose.yml build
+```
+
+```bash
+uv run python deploy/local_stack_test.py
+```
+
+## Back up the database
+
+```bash
+uv run python scripts/backup_db.py
+```
+
+It's safe while the receiver runs. It writes `backups/station-YYYY-MM-DD.db`
+and keeps the 14 newest copies.
+
 ## Rotate the API key
 
 1. Generate a new key:

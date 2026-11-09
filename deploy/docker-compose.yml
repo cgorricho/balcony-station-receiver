@@ -1,0 +1,57 @@
+# Balcony Station receiver. From the repository root:
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# Reachable only from the VPS itself (127.0.0.1); nginx is the public front.
+
+name: balcony-station
+
+services:
+  receiver:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: balcony-station-receiver:latest
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      # These override .env so the container layout can't be misconfigured.
+      STATION_HOST: 0.0.0.0
+      STATION_PORT: "8765"
+      STATION_DB_PATH: /app/data/station.db
+      STATION_LOG_DIR: /app/logs
+      # nginx on the host reaches the container through this network's gateway.
+      STATION_FORWARDED_ALLOW_IPS: 172.30.87.1
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ../data:/app/data
+      - ../logs:/app/logs
+    # Run as the VPS account that owns data/ and logs/ (see `id -u`, `id -g`).
+    user: "${STATION_UID:-1000}:${STATION_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Limits so a fault here can't starve the other sites on the VPS.
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "3"
+    networks:
+      - station
+
+networks:
+  station:
+    ipam:
+      config:
+        # If this clashes with another Docker network on the VPS, pick a free
+        # /24 and change STATION_FORWARDED_ALLOW_IPS above to its .1 address.
+        - subnet: 172.30.87.0/24
+          gateway: 172.30.87.1

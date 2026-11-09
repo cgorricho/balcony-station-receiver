@@ -17,6 +17,7 @@ import math
 import random
 import sys
 from datetime import date, datetime, time, timedelta
+from time import sleep
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -26,6 +27,9 @@ from receiver.derived import day_bounds
 from receiver.models import MAX_BATCH
 
 LUX_PEAK = 60_000.0
+# Like the real node: on 429 (nginx's rate limit), wait and send the same batch again.
+RATE_LIMIT_WAIT_SECONDS = 3
+RATE_LIMIT_TRIES = 20
 SUNRISE_HOUR = 6.5
 SUNSET_HOUR = 19.0
 
@@ -98,9 +102,15 @@ class Sender:
         self.posts = 0
         self.stored = 0
         self.duplicates = 0
+        self.rate_limited = 0
 
     def post(self, body: dict) -> dict:
-        response = self.client.post(self.url, json=body)
+        for _ in range(RATE_LIMIT_TRIES):
+            response = self.client.post(self.url, json=body)
+            if response.status_code != 429:
+                break
+            self.rate_limited += 1
+            sleep(RATE_LIMIT_WAIT_SECONDS)
         response.raise_for_status()
         result = response.json()
         self.posts += 1
@@ -179,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
         f"readings={total} posts={sender.posts} stored={sender.stored} "
         f"duplicates={sender.duplicates} buffered={len(sender.buffer)}"
     )
+    if sender.rate_limited:
+        print(f"rate limited {sender.rate_limited} times; waited and resent")
     return 0
 
 

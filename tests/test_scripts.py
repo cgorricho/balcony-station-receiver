@@ -212,3 +212,87 @@ def test_simulator_leaves_the_real_database_alone(tmp_path):
     assert result.returncode == 0, result.stderr
     assert str(tmp_path) in result.stdout
     assert "data" + os.sep + "station.db" not in result.stdout
+
+
+def make_db(path, rows):
+    from receiver import db as station_db
+
+    station_db.init_db(path)
+    conn = sqlite3.connect(path)
+    conn.executemany(
+        "INSERT INTO readings (node_id, seq, ts, ts_synced, received_at) VALUES (?, ?, ?, 1, ?)",
+        [("balcony-01", seq, 1_700_000_000 + seq, 1_700_000_000 + seq) for seq in range(rows)],
+    )
+    conn.commit()
+    return conn
+
+
+def test_backup_is_consistent_while_the_receiver_writes(tmp_path):
+    db = tmp_path / "station.db"
+    writer = make_db(db, 50)
+    # An uncommitted write in progress must not leak into the copy.
+    writer.execute("BEGIN")
+    writer.execute(
+        "INSERT INTO readings (node_id, seq, ts, ts_synced, received_at) VALUES ('balcony-01', 999, 1, 1, 1)"
+    )
+    result = run_script("backup_db.py", "--db", db, "--dest", tmp_path / "backups")
+    writer.rollback()
+    writer.close()
+    assert result.returncode == 0, result.stderr
+    assert "Backed up 50 readings" in result.stdout
+    copies = list((tmp_path / "backups").iterdir())
+    assert len(copies) == 1 and copies[0].name.startswith("station-")
+    restored = sqlite3.connect(copies[0])
+    assert restored.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert restored.execute("SELECT MAX(seq) FROM readings").fetchone()[0] == 49
+    restored.close()
+
+
+def test_backup_keeps_the_newest_copies_only(tmp_path):
+    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+    try:
+        from backup_db import backup
+    finally:
+        sys.path.pop(0)
+    db = tmp_path / "station.db"
+    make_db(db, 3).close()
+    dest = tmp_path / "backups"
+    dest.mkdir()
+    (dest / "notes.txt").write_text("keep me")
+    for day in range(1, 21):
+        backup(db, dest, keep=14, today=f"2026-10-{day:02d}")
+    names = sorted(p.name for p in dest.iterdir())
+    assert "notes.txt" in names
+    kept = [n for n in names if n.startswith("station-")]
+    assert kept[0] == "station-2026-10-07.db" and len(kept) == 14
+
+
+def test_backup_without_a_database_fails_clearly(tmp_path):
+    result = run_script("backup_db.py", "--db", tmp_path / "missing.db", "--dest", tmp_path / "b")
+    assert result.returncode != 0
+    assert "Database not found" in result.stderr
+    assert not (tmp_path / "b").exists()
+
+
+def test_fake_node_waits_and_resends_when_rate_limited(monkeypatch):
+    import httpx
+
+    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+    try:
+        import fake_node
+    finally:
+        sys.path.pop(0)
+    monkeypatch.setattr(fake_node, "sleep", lambda seconds: None)
+    replies = iter([429, 429, 200])
+    seen = []
+
+    def handler(request):
+        seen.append(request.content)
+        status = next(replies)
+        body = {"stored": 1, "duplicates": 0, "ack_seq": 1} if status == 200 else {}
+        return httpx.Response(status, json=body)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    sender = fake_node.Sender(client, "http://test/api/v1/readings", "n1")
+    assert sender.post({"readings": [1]})["ack_seq"] == 1
+    assert sender.rate_limited == 2 and len(seen) == 3 and len(set(seen)) == 1

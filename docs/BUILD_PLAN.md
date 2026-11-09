@@ -22,8 +22,8 @@ postponed about two weeks, but milestones 6 to 9 don't depend on it.
 | 5 | Logging: rotating file log with the API key redacted | Done | Claude |
 | 6 | Production hardening: no `?key=`, no `/docs`, forwarded IPs, `fake_node.py --url`, remove Windows scripts | Done | Claude |
 | 7 | Dashboard at `/dashboard`, with warnings for readings that look wrong, plus the `simulate.py` signal simulator | Done | Claude |
-| 8 | Packaging: Dockerfile, compose, nginx template, backups; container runs non-root and read-only | Next | Claude |
-| 9 | README rewritten for the VPS | Not started | Claude |
+| 8 | Packaging: Dockerfile, compose, nginx template, backups; container runs non-root and read-only | Done | Claude |
+| 9 | README rewritten for the VPS | Next | Claude |
 | 10 | Server readiness | Not started | Carlos and Claude |
 | 11 | Deploy | Not started | Carlos and Claude |
 | 12 | End-to-end over the real HTTPS address | Not started | Claude |
@@ -43,7 +43,7 @@ remain in git history.
 Carlos runs the steps that need `sudo`.
 
 - [ ] Clone the repo and create `.env` on the VPS with a new API key
-- [ ] Start the container
+- [ ] Check that `172.30.87.0/24` is free (`docker network inspect` on the existing networks), then start the container with `STATION_UID`/`STATION_GID` set
 - [ ] Install the nginx site and test with `nginx -t` before reloading
 - [ ] Issue the certificate with certbot
 - [ ] Create the dashboard login
@@ -65,7 +65,7 @@ Added 2026-11-08 (spec version 7). The receiver's protection depends on the firm
 | Item | Where | Status |
 |---|---|---|
 | Firmware checks the server certificate against built-in Let's Encrypt roots (ISRG Root X1 and X2) and the hostname, and never turns checking off | Spec 5.5, firmware project | Required, before firmware starts |
-| Container runs as a non-root user, read-only except `data/`, `logs/` and `/tmp`, no Linux capabilities, `no-new-privileges` | Spec section 8, milestone 8 | Planned |
+| Container runs as a non-root user, read-only except `data/`, `logs/` and `/tmp`, no Linux capabilities, `no-new-privileges` | Spec section 8, milestone 8 | Done, checked by `deploy/local_stack_test.py` |
 | Dashboard warns about readings that look wrong: out-of-range values, `seq` jumps, node clock ahead of the server or running backwards, unknown `node_id` | Spec 6.3, milestone 7 | Done |
 | ESP32 flash encryption | Spec 5.5 | Open decision above |
 
@@ -98,6 +98,16 @@ If a node is lost or stolen, rotate the API key.
 | Chart window ends at the node's newest reading (ignoring clocks more than a day ahead), not at today | Old data still shows, and a bad clock can't drag the window away |
 | `simulate.py` runs its own receiver on `127.0.0.1:8766` with `data/simulator.db` | It can never write to the real database |
 | Log redacts the key as well | A traceback must not leak it |
+| Image: `python:3.14-slim-trixie` with `uv` 0.12.19, dependencies from `uv.lock`; source, scripts and the venv only | Same Python and locked versions as development; `.dockerignore` keeps `.env`, `data/` and `logs/` out |
+| Compose sets the container's host, port, paths and trusted proxy, overriding `.env` | The container layout can't be misconfigured from `.env` |
+| Fixed Docker network `172.30.87.0/24`; the app trusts forwarded IPs from its gateway `172.30.87.1` only | nginx on the host reaches the published port through that gateway. A fixed address is checkable; a clash fails loudly at `docker compose up` |
+| Container runs as `STATION_UID:STATION_GID` (default 1000), not the image's own UID 10001 | Files in `data/` and `logs/` belong to Carlos's account, so his cron backup can read them |
+| Memory, CPU, process and Docker log limits | A fault here can't starve the other sites on the VPS |
+| nginx: 30 requests a minute per address, burst 20, on the node's paths; 120 a minute on the dashboard; other methods `403`; everything else `404` | Spec 5. Zone names start with `station_` so they can't clash with other sites |
+| nginx replaces `X-Forwarded-For` with the connecting address instead of appending | A client can't put a forged address in the receiver's log |
+| Dashboard password file is created after the certificate | The password never crosses plain HTTP |
+| The node waits and resends on `429` (spec 5.1); `fake_node.py` does the same | A long catch-up after an outage must not lose its place |
+| `backup_db.py` is standard library only and Python 3.10 compatible, and checks each copy's integrity | The VPS's own `python3` runs it from cron, outside the container |
 
 ## Known gaps
 
@@ -106,7 +116,7 @@ If a node is lost or stolen, rotate the API key.
 - `--gap` in `fake_node.py` simulates the server being unreachable, so no data is missing. The
   30-minute cap for real data loss is covered by a unit test.
 - Readings with `ts_synced=false` count in summaries at the time the node reported.
-- The code has only been run on Windows so far. Milestone 8 runs it on Linux.
-- Crash recovery is untested. Milestone 8 covers `restart: unless-stopped`.
+- `deploy/local_stack_test.py` runs on Docker Desktop, where nginx is a container on the receiver's network. On the VPS, nginx runs on the host, so the trusted gateway address is first confirmed in milestone 11 (the receiver's log should show real client addresses, not `172.30.87.1`).
+- A restart keeps the data (checked). A crash mid-write relies on SQLite's journal and isn't tested separately.
 - Time running backwards is only checked within the chart window, so it's missed if the earlier reading is outside it.
 - An out-of-range value stays in the charts and daily summary, so one glitch can stretch the temperature axis. The warning explains it.

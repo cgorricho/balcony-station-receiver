@@ -1,0 +1,9 @@
+# Only what the image needs. Never .env, data or logs.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!scripts/
+**/__pycache__
+**/*.pyc
