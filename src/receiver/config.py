@@ -24,6 +24,8 @@ class Settings:
     # Comma-separated proxy addresses or networks whose X-Forwarded-For is
     # trusted. Empty trusts no one.
     forwarded_allow_ips: str = "127.0.0.1"
+    # Node IDs the dashboard expects. Readings from any other node get a warning.
+    known_nodes: tuple[str, ...] = ("balcony-01",)
 
 
 def _resolve(value: str) -> Path:
@@ -48,4 +50,9 @@ def load_settings() -> Settings:
             os.environ.get("STATION_SUN_THRESHOLD_LUX", DEFAULT_SUN_THRESHOLD_LUX)
         ),
         forwarded_allow_ips=os.environ.get("STATION_FORWARDED_ALLOW_IPS", "127.0.0.1"),
+        known_nodes=tuple(
+            node.strip()
+            for node in os.environ.get("STATION_KNOWN_NODES", "balcony-01").split(",")
+            if node.strip()
+        ),
     )

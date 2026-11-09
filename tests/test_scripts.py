@@ -176,3 +176,39 @@ def test_fake_node_rejects_a_url_without_http(url):
     result = run_script("fake_node.py", "--url", url, "--key", KEY)
     assert result.returncode == 2
     assert "must start with http:// or https://" in result.stderr
+
+
+def test_simulator_fills_history_and_injects_each_warning(tmp_path):
+    db = tmp_path / "simulator.db"
+    result = run_script(
+        "simulate.py", "--port", 0, "--tick", 0, "--ticks", 50, "--no-browser", "--db", db,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "frost night" in result.stdout
+    assert (
+        "Warnings: clock_backwards=1, out_of_range=1, seq_jump=1, unknown_node=1" in result.stdout
+    )
+    # 3 days of history at 10-minute steps, minus the 3-hour outage, plus 50 live readings.
+    readings = scalar(db, "SELECT COUNT(*) FROM readings WHERE node_id = 'balcony-01'")
+    assert 3 * 144 - 18 - 2 <= readings - 50 <= 3 * 144 - 18 + 2
+    frost = scalar(db, "SELECT MIN(value_num) FROM metrics WHERE name = 'air_temp_c'")
+    assert frost < 0
+
+
+def test_simulator_without_anomalies_has_no_warnings(tmp_path):
+    result = run_script(
+        "simulate.py", "--port", 0, "--tick", 0, "--ticks", 50, "--no-browser",
+        "--no-anomalies", "--db", tmp_path / "simulator.db",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Warnings: none" in result.stdout
+
+
+def test_simulator_leaves_the_real_database_alone(tmp_path):
+    result = run_script(
+        "simulate.py", "--port", 0, "--tick", 0, "--ticks", 1, "--no-browser",
+        "--db", tmp_path / "simulator.db",
+    )
+    assert result.returncode == 0, result.stderr
+    assert str(tmp_path) in result.stdout
+    assert "data" + os.sep + "station.db" not in result.stdout

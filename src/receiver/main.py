@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from . import db
+from .dashboard import create_router
 from .config import Settings, load_settings
 from .logging_setup import configure_logging
 from .models import (
@@ -162,5 +163,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if latest is None:
             raise HTTPException(status_code=404, detail="no readings for this node")
         return LatestResponse(**latest)
+
+    app.include_router(create_router(settings))
 
     return app

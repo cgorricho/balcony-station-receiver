@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Balcony Station</title>
+<link rel="stylesheet" href="/dashboard/app.css">
+</head>
+<body>
+<header>
+  <div>
+    <h1>Balcony Station</h1>
+    <p id="status" class="muted">Loading…</p>
+  </div>
+  <div class="controls">
+    <label>Node <select id="node"></select></label>
+    <label>Days
+      <select id="days">
+        <option value="1">1</option>
+        <option value="3">3</option>
+        <option value="7" selected>7</option>
+        <option value="14">14</option>
+        <option value="31">31</option>
+      </select>
+    </label>
+  </div>
+</header>
+
+<main>
+  <section id="latest" aria-labelledby="latest-title">
+    <h2 id="latest-title">Latest reading</h2>
+    <div id="cards" class="cards"></div>
+    <p id="latest-meta" class="muted"></p>
+  </section>
+
+  <section id="warnings-section" aria-labelledby="warnings-title" hidden>
+    <h2 id="warnings-title">Warnings</h2>
+    <ul id="warnings"></ul>
+  </section>
+
+  <section aria-labelledby="charts-title">
+    <h2 id="charts-title">Last <span id="days-label">7</span> days</h2>
+    <p id="window" class="muted"></p>
+    <div id="empty" class="empty" hidden>No readings for this node yet.</div>
+    <div id="chart-temp" class="chart"></div>
+    <div id="chart-lux" class="chart"></div>
+    <div id="chart-moisture" class="chart"></div>
+    <div id="chart-battery" class="chart"></div>
+    <p class="muted legend-note">Shaded bands mark gaps of more than 30 minutes with no readings.</p>
+  </section>
+
+  <section aria-labelledby="summary-title">
+    <h2 id="summary-title">Daily summary</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Day</th><th>Air min °F</th><th>Air max °F</th><th>Tray min °F</th><th>Tray max °F</th>
+            <th>Hours &lt; 45°F</th><th>DLI</th><th>Sun start</th><th>Sun end</th><th>Coverage</th>
+          </tr>
+        </thead>
+        <tbody id="summary"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script src="/dashboard/plotly.min.js"></script>
+<script src="/dashboard/app.js"></script>
+</body>
+</html>

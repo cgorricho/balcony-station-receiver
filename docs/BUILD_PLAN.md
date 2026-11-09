@@ -21,8 +21,8 @@ postponed about two weeks, but milestones 6 to 9 don't depend on it.
 | 4 | Derived values and scripts | Done | Claude |
 | 5 | Logging: rotating file log with the API key redacted | Done | Claude |
 | 6 | Production hardening: no `?key=`, no `/docs`, forwarded IPs, `fake_node.py --url`, remove Windows scripts | Done | Claude |
-| 7 | Dashboard at `/dashboard`, with warnings for readings that look wrong | Next | Claude |
-| 8 | Packaging: Dockerfile, compose, nginx template, backups; container runs non-root and read-only | Not started | Claude |
+| 7 | Dashboard at `/dashboard`, with warnings for readings that look wrong, plus the `simulate.py` signal simulator | Done | Claude |
+| 8 | Packaging: Dockerfile, compose, nginx template, backups; container runs non-root and read-only | Next | Claude |
 | 9 | README rewritten for the VPS | Not started | Claude |
 | 10 | Server readiness | Not started | Carlos and Claude |
 | 11 | Deploy | Not started | Carlos and Claude |
@@ -66,7 +66,7 @@ Added 2026-11-08 (spec version 7). The receiver's protection depends on the firm
 |---|---|---|
 | Firmware checks the server certificate against built-in Let's Encrypt roots (ISRG Root X1 and X2) and the hostname, and never turns checking off | Spec 5.5, firmware project | Required, before firmware starts |
 | Container runs as a non-root user, read-only except `data/`, `logs/` and `/tmp`, no Linux capabilities, `no-new-privileges` | Spec section 8, milestone 8 | Planned |
-| Dashboard warns about readings that look wrong: out-of-range values, `seq` jumps, `ts` far from `received_at`, unknown `node_id` | Spec 6.3, milestone 7 | Planned |
+| Dashboard warns about readings that look wrong: out-of-range values, `seq` jumps, node clock ahead of the server or running backwards, unknown `node_id` | Spec 6.3, milestone 7 | Done |
 | ESP32 flash encryption | Spec 5.5 | Open decision above |
 
 If a node is lost or stolen, rotate the API key.
@@ -91,6 +91,12 @@ If a node is lost or stolen, rotate the API key.
 | `python -m receiver` is the only supported launch | It turns off uvicorn's access log and proxy-header handling |
 | Forwarded client IPs handled in the app, trusted only from `STATION_FORWARDED_ALLOW_IPS` (default `127.0.0.1`, empty trusts no one) | Testable without a real proxy, and an outside sender can't fake its address in the log |
 | `fake_node.py --first-seq` skips the `/latest` lookup | The public address hides `/latest`, and milestone 12 runs through it |
+| Clock warnings flag a node clock ahead of the server, or time running backwards between seqs, not "`ts` more than a day from `received_at`" | The original rule flagged every reading a node buffered during an outage and sent late |
+| Plotly's JavaScript comes from the `plotly` package (7.1, plotly.js 4.1.1) and is served by the app | The spec rules out a third-party CDN, and PyPI is the project's normal dependency source |
+| Dashboard JS and CSS are separate files under a strict Content-Security-Policy, and data is inserted as text only | A stored metric name or node ID can't run as script in the browser |
+| Dashboard has no API key; nginx's login guards all of `/dashboard` | Spec 6.3. Locally it's only on `127.0.0.1` |
+| Chart window ends at the node's newest reading (ignoring clocks more than a day ahead), not at today | Old data still shows, and a bad clock can't drag the window away |
+| `simulate.py` runs its own receiver on `127.0.0.1:8766` with `data/simulator.db` | It can never write to the real database |
 | Log redacts the key as well | A traceback must not leak it |
 
 ## Known gaps
@@ -102,3 +108,5 @@ If a node is lost or stolen, rotate the API key.
 - Readings with `ts_synced=false` count in summaries at the time the node reported.
 - The code has only been run on Windows so far. Milestone 8 runs it on Linux.
 - Crash recovery is untested. Milestone 8 covers `restart: unless-stopped`.
+- Time running backwards is only checked within the chart window, so it's missed if the earlier reading is outside it.
+- An out-of-range value stays in the charts and daily summary, so one glitch can stretch the temperature axis. The warning explains it.

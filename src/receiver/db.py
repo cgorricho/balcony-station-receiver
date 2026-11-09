@@ -202,3 +202,37 @@ def store_batch(
             )
         ack_seq = compute_ack_seq(conn, batch.node_id, batch.oldest_buffered_seq)
     return stored, len(batch.readings) - stored, ack_seq
+
+
+def newest_ts(db_path: Path, node_id: str, until: int) -> int | None:
+    """Return the node's newest reading time at or before `until`."""
+    with closing(connect(db_path)) as conn:
+        return conn.execute(
+            "SELECT MAX(ts) FROM readings WHERE node_id = ? AND ts <= ?", (node_id, until)
+        ).fetchone()[0]
+
+
+def ahead_seqs(db_path: Path, node_id: str, max_ahead: int) -> list[int]:
+    """Return seqs whose node time is more than max_ahead seconds after received_at."""
+    with closing(connect(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT seq FROM readings WHERE node_id = ? AND ts - received_at > ? "
+            "ORDER BY seq",
+            (node_id, max_ahead),
+        ).fetchall()
+    return [seq for (seq,) in rows]
+
+
+def fetch_by_seq(db_path: Path, node_id: str, seqs: list[int]) -> list[dict]:
+    """Return the given readings with their metrics, in seq order."""
+    found = []
+    for seq in seqs:
+        with closing(connect(db_path)) as conn:
+            row = conn.execute(
+                "SELECT ts FROM readings WHERE node_id = ? AND seq = ?", (node_id, seq)
+            ).fetchone()
+        if row is not None:
+            found.extend(
+                r for r in fetch_readings(db_path, node_id, row[0], row[0] + 1) if r["seq"] == seq
+            )
+    return found

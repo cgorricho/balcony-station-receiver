@@ -65,6 +65,25 @@ coverage for each day.
 uv run python scripts/daily_summary.py --from 2026-01-01
 ```
 
+## See the dashboard in action
+
+The signal simulator starts its own receiver on `127.0.0.1:8766` with a scratch
+database (`data/simulator.db`), so your real readings are never touched:
+
+```powershell
+uv run python scripts/simulate.py
+```
+
+It opens the dashboard in your browser, fills in three days of history (with a
+frost night and a 3-hour outage), then plays the last day forward, one reading
+every 2 seconds. At readings 12, 24, 36 and 48 it injects a sensor glitch, an
+unknown node, a wrong clock and a `seq` jump, so each warning appears on the
+page. Ctrl+C stops it. Useful flags: `--tick` (seconds per reading),
+`--history-days`, `--no-anomalies`, `--port 0` (any free port).
+
+The real receiver serves the same page at `/dashboard`. On the VPS, nginx's login
+protects it.
+
 ## Test without the node
 
 With the server running, this pushes a simulated day into the **real** database,

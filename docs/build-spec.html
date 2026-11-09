@@ -111,11 +111,14 @@ hr{border:none;border-top:1px solid #d0d7de;margin:2em 0}
 │   ├── db.py               # SQLite init, inserts, queries
 │   ├── config.py           # settings from .env
 │   ├── derived.py          # PPFD / DLI calculations
-│   └── dashboard.py        # /dashboard page and charts
+│   ├── anomalies.py        # warnings for readings that look wrong
+│   ├── dashboard.py        # /dashboard page, data and charts
+│   └── static/             # dashboard HTML, JS and CSS
 ├── scripts/
 │   ├── fake_node.py        # simulates the ESP32 (batches, resends, gaps)
 │   ├── export_csv.py       # export readings to CSV (°C and °F columns)
 │   ├── daily_summary.py    # min/max temps, DLI, sun window per day
+│   ├── simulate.py         # signal simulator: local receiver + live fake data
 │   └── backup_db.py        # consistent SQLite backup, keeps 14 days
 ├── deploy/
 │   ├── Dockerfile
@@ -144,6 +147,7 @@ STATION_TZ=America/New_York
 STATION_LUX_PER_PPFD=54
 STATION_SUN_THRESHOLD_LUX=20000
 STATION_FORWARDED_ALLOW_IPS=&lt;the Docker gateway address nginx connects from&gt;
+STATION_KNOWN_NODES=balcony-01
 </code></pre>
 <p><code>STATION_HOST</code> is <code>0.0.0.0</code> inside the container only. Docker publishes the port on <code>127.0.0.1</code>, so the service is reachable only through nginx. On the VPS, <code>.env</code> is readable by Carlos's account only (<code>chmod 600</code>).</p>
 <hr />
@@ -265,7 +269,7 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <li>Today's latest reading, and the daily summary table from <code>derived.py</code>.</li>
 <li>Plotly's JavaScript is served by the app, not a third-party CDN.</li>
 <li>Works on a phone.</li>
-<li><strong>Warnings for readings that look wrong</strong>, so tampering or a faulty sensor shows up. It flags values outside physical ranges (for example air temperature outside −40 to 60 °C, humidity outside 0 to 100%, negative lux), jumps in <code>seq</code> of more than 1,000 above the previous one, <code>ts</code> more than a day away from <code>received_at</code>, and any <code>node_id</code> other than the known ones. Warnings only. Nothing is deleted or rejected. The ranges live in one place in the code.</li>
+<li><strong>Warnings for readings that look wrong</strong>, so tampering or a faulty sensor shows up. It flags values outside physical ranges (for example air temperature outside −40 to 60 °C, humidity outside 0 to 100%, negative lux), jumps in <code>seq</code> of more than 1,000 above the previous one, a node clock more than an hour ahead of <code>received_at</code>, node time running backwards by more than an hour from one <code>seq</code> to the next, and any <code>node_id</code> not in <code>STATION_KNOWN_NODES</code>. Readings that arrive late because the node buffered them during an outage are not flagged, since they keep their order. Warnings only. Nothing is deleted or rejected. The ranges live in one place in the code.</li>
 <li>Login is nginx basic auth. The app has no user accounts, so the dashboard must never be published except through nginx.</li>
 </ul>
 <hr />
@@ -274,6 +278,7 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <li><strong><code>fake_node.py</code></strong>: posts realistic fake data (daytime light curve, temperatures that drop overnight). Flags: <code>--batch N</code>, <code>--resend</code> (repeats the last batch to test duplicate handling), <code>--gap HOURS</code> (simulates the VPS being unreachable), <code>--url</code> (full base URL, so it can test HTTPS), <code>--key</code>.</li>
 <li><strong><code>export_csv.py</code></strong>: wide CSV with one row per reading and one column per metric, plus <code>*_f</code> columns for temperatures. Flags: <code>--from</code>, <code>--to</code> dates, <code>--node</code>.</li>
 <li><strong><code>daily_summary.py</code></strong>: a table per day with min/max air temperature (°F), min/max tray temperature (°F), hours below 45°F, DLI, sun window start/end, data coverage %.</li>
+<li><strong><code>simulate.py</code></strong>: a signal simulator for watching the dashboard without hardware. It starts its own receiver on <code>127.0.0.1</code> with a scratch database (<code>data/simulator.db</code>), fills in a few days of history with a frost night and a 3-hour outage, then plays the last day forward one reading every couple of seconds and injects each kind of warning. It never touches the real database.</li>
 <li><strong><code>backup_db.py</code></strong>: a consistent copy using SQLite's backup API, safe while the receiver runs. Keeps 14 daily copies. Runs nightly from Carlos's cron.</li>
 </ul>
 <hr />
@@ -297,7 +302,7 @@ CREATE INDEX idx_metrics_name ON metrics(name);
 <li><strong>Derived values and scripts:</strong> DLI test using a synthetic day with known lux values gives the expected value within 1%. Fake node, CSV export and daily summary all run against a test database.</li>
 <li><strong>Logging:</strong> a rotating file log in <code>logs/</code> (5 × 1 MB) records each batch (node, stored, duplicates, ack_seq, client IP) and every error. A test confirms the API key never appears in the log.</li>
 <li><strong>Production hardening:</strong> remove <code>?key=</code>; turn off <code>/docs</code>, <code>/redoc</code> and <code>/openapi.json</code>; trust forwarded client IPs from <code>STATION_FORWARDED_ALLOW_IPS</code> only; give <code>fake_node.py</code> a <code>--url</code> flag. Remove the Windows install scripts. Tests cover each change.</li>
-<li><strong>Dashboard:</strong> the page in 6.3, with tests for empty data, gaps, text metrics and each warning.</li>
+<li><strong>Dashboard:</strong> the page in 6.3 and the <code>simulate.py</code> signal simulator, with tests for empty data, gaps, text metrics and each warning. The simulator shows every warning on the live page.</li>
 <li><strong>Packaging:</strong> Dockerfile, compose file, nginx template and <code>backup_db.py</code>. The image builds and passes the Done-when scenario locally on Linux, running as the non-root user with the read-only filesystem from Section 8. A restored backup opens and holds the expected rows.</li>
 <li><strong>README:</strong> rewritten for the VPS: deploy, update, start and stop, view the dashboard, export CSV, run the daily summary, rotate the API key, restore a backup, and remove the site.</li>
 <li><strong>Server readiness:</strong> Section 8, steps 1 and 2.</li>
