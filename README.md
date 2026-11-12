@@ -125,12 +125,12 @@ file to add HTTPS.
 
 ### 6. Create the dashboard login (sudo)
 
-Do this after the certificate, so the password never crosses plain HTTP.
-`htpasswd` comes from the `apache2-utils` package. `-c` creates the file, so use it
-the first time only.
+Do this after the certificate, so the password never crosses plain HTTP. The VPS
+has no `htpasswd` tool, so this uses `openssl`, which asks for the password twice
+and keeps it out of your shell history. Running it again replaces the login.
 
 ```bash
-sudo htpasswd -c /etc/nginx/station.htpasswd carlos
+printf 'carlos:%s\n' "$(openssl passwd -6)" | sudo tee /etc/nginx/station.htpasswd >/dev/null
 ```
 
 ```bash

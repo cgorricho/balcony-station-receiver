@@ -74,7 +74,9 @@ def main() -> int:
     site = (DEPLOY / "nginx-station.conf").read_text(encoding="utf-8")
     site = site.replace("server 127.0.0.1:8765;", "server receiver:8765;")
     (scratch / "deploy" / "station.conf").write_bytes(site.encode())
-    (scratch / "deploy" / "station.htpasswd").write_bytes(f"{USER}:{{PLAIN}}{PASSWORD}\n".encode())
+    # The same SHA-512 crypt format the README creates with openssl on the VPS.
+    hashed = run("openssl", "passwd", "-6", "-stdin", input=PASSWORD + "\n").stdout.strip()
+    (scratch / "deploy" / "station.htpasswd").write_bytes(f"{USER}:{hashed}\n".encode())
     override = {
         "services": {
             "receiver": {
@@ -84,7 +86,7 @@ def main() -> int:
                 "environment": {"STATION_FORWARDED_ALLOW_IPS": "172.30.87.0/24"},
             },
             "nginx": {
-                "image": "nginx:1.28-alpine",
+                "image": "nginx:1.18-alpine",
                 "ports": ["127.0.0.1:18080:80"],
                 "volumes": [
                     f"{(scratch / 'deploy' / 'station.conf').as_posix()}:/etc/nginx/conf.d/default.conf:ro",

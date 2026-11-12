@@ -33,11 +33,24 @@ remain in git history.
 
 ## Milestone 10: server readiness
 
-- [ ] Confirm who else can log in to the VPS
-- [ ] Check `ufw` rules (needs `sudo`)
-- [ ] Check from outside which Docker-published ports are reachable, and close any that shouldn't be
-- [ ] Add the DNS record for `station.carlosgorrichoai.one`
-- [ ] Confirm the VPS layout the README assumes: nginx uses `sites-available`/`sites-enabled`, certbot has its nginx plugin, `htpasswd` (`apache2-utils`) is installed, `python3` is 3.10 or newer, and Carlos's account can run `docker` without `sudo`
+Read-only checks ran on 2026-11-12. Details about the server stay out of this public
+repo; Carlos has them.
+
+- [x] Confirm who else can log in over SSH
+- [ ] Review root's SSH keys (needs `sudo`)
+- [ ] Check `ufw` and Docker's firewall rules (needs `sudo`)
+- [x] Check from outside which ports answer; port 8765 is not reachable. Findings about
+  other services were reported to Carlos and are outside this project
+- [ ] Add the DNS record for `station.carlosgorrichoai.one` (it doesn't exist yet)
+- [x] Confirm the VPS layout the README assumes: nginx 1.18 with `sites-available`/`sites-enabled`,
+  certbot with its nginx plugin and renewal timer, `python3` 3.10, `docker` without `sudo`,
+  and `172.30.87.0/24` free
+- [ ] Check that the current nginx configuration passes `sudo nginx -t` before anything is added
+
+Changes from these checks: there's no `htpasswd` on the VPS, so the README creates the
+login with `openssl passwd -6` instead of installing a package. The VPS has no IPv6, so
+the nginx template listens on IPv4 only, like the other sites. `local_stack_test.py`
+now uses nginx 1.18, the VPS's version, and the same password format.
 
 ## Milestone 11: deploy
 
